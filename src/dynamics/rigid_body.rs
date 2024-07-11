@@ -636,8 +636,7 @@ impl RigidBody {
     }
 
     /// Adds a collider to this rigid-body.
-    // TODO ECS: we keep this public for now just to simply our experiments on bevy_rapier.
-    pub fn add_collider(
+    pub(crate) fn add_collider_internal(
         &mut self,
         co_handle: ColliderHandle,
         co_parent: &ColliderParent,
@@ -1134,7 +1133,8 @@ pub struct RigidBodyBuilder {
     pub linear_damping: Real,
     /// Damping factor for gradually slowing down the angular motion of the rigid-body, `0.0` by default.
     pub angular_damping: Real,
-    body_type: RigidBodyType,
+    /// The type of rigid-body being constructed.
+    pub body_type: RigidBodyType,
     mprops_flags: LockedAxes,
     /// The additional mass-properties of the rigid-body being built. See [`RigidBodyBuilder::additional_mass_properties`] for more information.
     additional_mass_properties: RigidBodyAdditionalMassProps,
@@ -1168,6 +1168,12 @@ pub struct RigidBodyBuilder {
     ///
     /// See [`RigidBody::set_additional_solver_iterations`] for additional information.
     pub additional_solver_iterations: usize,
+}
+
+impl Default for RigidBodyBuilder {
+    fn default() -> Self {
+        Self::dynamic()
+    }
 }
 
 impl RigidBodyBuilder {

@@ -127,7 +127,18 @@ impl MultibodyJointSet {
             })
     }
 
-    /// Inserts a new multibody_joint into this set.
+    /// Inserts a new kinematic multibody joint into this set.
+    pub fn insert_kinematic(
+        &mut self,
+        body1: RigidBodyHandle,
+        body2: RigidBodyHandle,
+        data: impl Into<GenericJoint>,
+        wake_up: bool,
+    ) -> Option<MultibodyJointHandle> {
+        self.do_insert(body1, body2, data, true, wake_up)
+    }
+
+    /// Inserts a new multibody joint into this set.
     pub fn insert(
         &mut self,
         body1: RigidBodyHandle,
@@ -135,9 +146,20 @@ impl MultibodyJointSet {
         data: impl Into<GenericJoint>,
         wake_up: bool,
     ) -> Option<MultibodyJointHandle> {
-        let data = data.into();
+        self.do_insert(body1, body2, data, false, wake_up)
+    }
+
+    /// Inserts a new multibody_joint into this set.
+    fn do_insert(
+        &mut self,
+        body1: RigidBodyHandle,
+        body2: RigidBodyHandle,
+        data: impl Into<GenericJoint>,
+        kinematic: bool,
+        wake_up: bool,
+    ) -> Option<MultibodyJointHandle> {
         let link1 = self.rb2mb.get(body1.0).copied().unwrap_or_else(|| {
-            let mb_handle = self.multibodies.insert(Multibody::with_root(body1));
+            let mb_handle = self.multibodies.insert(Multibody::with_root(body1, true));
             MultibodyLinkId {
                 graph_id: self.connectivity_graph.graph.add_node(body1),
                 multibody: MultibodyIndex(mb_handle),
@@ -146,7 +168,7 @@ impl MultibodyJointSet {
         });
 
         let link2 = self.rb2mb.get(body2.0).copied().unwrap_or_else(|| {
-            let mb_handle = self.multibodies.insert(Multibody::with_root(body2));
+            let mb_handle = self.multibodies.insert(Multibody::with_root(body2, true));
             MultibodyLinkId {
                 graph_id: self.connectivity_graph.graph.add_node(body2),
                 multibody: MultibodyIndex(mb_handle),
@@ -174,7 +196,7 @@ impl MultibodyJointSet {
             link.id += multibody1.num_links();
         }
 
-        multibody1.append(mb2, link1.id, MultibodyJoint::new(data));
+        multibody1.append(mb2, link1.id, MultibodyJoint::new(data.into(), kinematic));
 
         if wake_up {
             self.to_wake_up.push(body1);
@@ -187,7 +209,7 @@ impl MultibodyJointSet {
         Some(MultibodyJointHandle(body2.0))
     }
 
-    /// Removes an multibody_joint from this set.
+    /// Removes a multibody_joint from this set.
     pub fn remove(&mut self, handle: MultibodyJointHandle, wake_up: bool) {
         if let Some(removed) = self.rb2mb.get(handle.0).copied() {
             let multibody = self.multibodies.remove(removed.multibody.0).unwrap();
@@ -195,10 +217,9 @@ impl MultibodyJointSet {
             // Remove the edge from the connectivity graph.
             if let Some(parent_link) = multibody.link(removed.id).unwrap().parent_id() {
                 let parent_rb = multibody.link(parent_link).unwrap().rigid_body;
-                self.connectivity_graph.remove_edge(
-                    self.rb2mb.get(parent_rb.0).unwrap().graph_id,
-                    removed.graph_id,
-                );
+                let parent_graph_id = self.rb2mb.get(parent_rb.0).unwrap().graph_id;
+                self.connectivity_graph
+                    .remove_edge(parent_graph_id, removed.graph_id);
 
                 if wake_up {
                     self.to_wake_up.push(RigidBodyHandle(handle.0));
@@ -214,8 +235,12 @@ impl MultibodyJointSet {
                 for multibody in multibodies {
                     if multibody.num_links() == 1 {
                         // We don’t have any multibody_joint attached to this body, remove it.
-                        if let Some(other) = self.connectivity_graph.remove_node(removed.graph_id) {
-                            self.rb2mb.get_mut(other.0).unwrap().graph_id = removed.graph_id;
+                        let isolated_link = multibody.link(0).unwrap();
+                        let isolated_graph_id =
+                            self.rb2mb.get(isolated_link.rigid_body.0).unwrap().graph_id;
+                        if let Some(other) = self.connectivity_graph.remove_node(isolated_graph_id)
+                        {
+                            self.rb2mb.get_mut(other.0).unwrap().graph_id = isolated_graph_id;
                         }
                     } else {
                         let mb_id = self.multibodies.insert(multibody);

@@ -1,7 +1,7 @@
 [package]
 name = "rapier3d"
-version = "0.19.0"
-authors = ["Sébastien Crozet <developer@crozet.re>"]
+version = "0.21.0"
+authors = ["Sébastien Crozet <sebcrozet@dimforge.com>"]
 description = "3-dimensional physics engine in Rust."
 documentation = "https://docs.rs/rapier3d"
 homepage = "https://rapier.rs"
@@ -21,7 +21,7 @@ dim3 = []
 f32 = []
 parallel = ["rayon"]
 simd-stable = ["parry3d/simd-stable", "simba/wide", "simd-is-enabled"]
-simd-nightly = ["parry3d/simd-nightly", "simba/packed_simd", "simd-is-enabled"]
+simd-nightly = ["parry3d/simd-nightly", "simba/portable_simd", "simd-is-enabled"]
 # Do not enable this feature directly. It is automatically
 # enabled with the "simd-stable" or "simd-nightly" feature.
 simd-is-enabled = ["vec_map"]
@@ -51,22 +51,24 @@ required-features = ["dim3", "f32"]
 vec_map = { version = "0.8", optional = true }
 instant = { version = "0.1", features = ["now"], optional = true }
 num-traits = "0.2"
-nalgebra = "0.32"
-parry3d = "0.15.0"
-simba = "0.8"
+nalgebra = "0.33"
+parry3d = "0.16.0"
+simba = "0.9"
 approx = "0.5"
 rayon = { version = "1", optional = true }
 crossbeam = "0.8"
 arrayvec = "0.7"
 bit-vec = "0.6"
-rustc-hash = "1"
+rustc-hash = "2"
 serde = { version = "1", features = ["derive"], optional = true }
 downcast-rs = "1.2"
 num-derive = "0.4"
-bitflags = "1"
+bitflags = "2"
 log = "0.4"
 ordered-float = "4"
+thiserror = "1"
 
 [dev-dependencies]
 bincode = "1"
 serde = { version = "1", features = ["derive"] }
+oorandom = { version = "11", default-features = false }

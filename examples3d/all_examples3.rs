@@ -55,6 +55,7 @@ mod rope_joints3;
 mod sensor3;
 mod spring_joints3;
 mod trimesh3;
+mod urdf3;
 mod vehicle_controller3;
 mod vehicle_joints3;
 
@@ -70,7 +71,7 @@ fn demo_name_from_command_line() -> Option<String> {
     None
 }
 
-#[cfg(any(target_arch = "wasm32", target_arch = "asmjs"))]
+#[cfg(target_arch = "wasm32")]
 fn demo_name_from_url() -> Option<String> {
     None
     //    let window = stdweb::web::window();
@@ -82,7 +83,7 @@ fn demo_name_from_url() -> Option<String> {
     //    }
 }
 
-#[cfg(not(any(target_arch = "wasm32", target_arch = "asmjs")))]
+#[cfg(not(target_arch = "wasm32"))]
 fn demo_name_from_url() -> Option<String> {
     None
 }
@@ -119,6 +120,7 @@ pub fn main() {
         ("Sensor", sensor3::init_world),
         ("Spring Joints", spring_joints3::init_world),
         ("TriMesh", trimesh3::init_world),
+        ("Urdf", urdf3::init_world),
         ("Vehicle controller", vehicle_controller3::init_world),
         ("Vehicle joints", vehicle_joints3::init_world),
         ("Keva tower", keva3::init_world),

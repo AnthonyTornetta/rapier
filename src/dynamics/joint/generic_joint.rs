@@ -12,13 +12,14 @@ use crate::dynamics::SphericalJoint;
 bitflags::bitflags! {
     /// A bit mask identifying multiple degrees of freedom of a joint.
     #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
+    #[derive(Copy, Clone, PartialEq, Eq, Debug)]
     pub struct JointAxesMask: u8 {
-        /// The translational degree of freedom along the local X axis of a joint.
-        const X = 1 << 0;
-        /// The translational degree of freedom along the local Y axis of a joint.
-        const Y = 1 << 1;
-        /// The translational degree of freedom along the local Z axis of a joint.
-        const Z = 1 << 2;
+        /// The linear (translational) degree of freedom along the local X axis of a joint.
+        const LIN_X = 1 << 0;
+        /// The linear (translational) degree of freedom along the local Y axis of a joint.
+        const LIN_Y = 1 << 1;
+        /// The linear (translational) degree of freedom along the local Z axis of a joint.
+        const LIN_Z = 1 << 2;
         /// The angular degree of freedom along the local X axis of a joint.
         const ANG_X = 1 << 3;
         /// The angular degree of freedom along the local Y axis of a joint.
@@ -26,23 +27,23 @@ bitflags::bitflags! {
         /// The angular degree of freedom along the local Z axis of a joint.
         const ANG_Z = 1 << 5;
         /// The set of degrees of freedom locked by a revolute joint.
-        const LOCKED_REVOLUTE_AXES = Self::X.bits | Self::Y.bits | Self::Z.bits | Self::ANG_Y.bits | Self::ANG_Z.bits;
+        const LOCKED_REVOLUTE_AXES = Self::LIN_X.bits() | Self::LIN_Y.bits() | Self::LIN_Z.bits() | Self::ANG_Y.bits() | Self::ANG_Z.bits();
         /// The set of degrees of freedom locked by a prismatic joint.
-        const LOCKED_PRISMATIC_AXES = Self::Y.bits | Self::Z.bits | Self::ANG_X.bits | Self::ANG_Y.bits | Self::ANG_Z.bits;
+        const LOCKED_PRISMATIC_AXES = Self::LIN_Y.bits() | Self::LIN_Z.bits() | Self::ANG_X.bits() | Self::ANG_Y.bits() | Self::ANG_Z.bits();
         /// The set of degrees of freedom locked by a fixed joint.
-        const LOCKED_FIXED_AXES = Self::X.bits | Self::Y.bits | Self::Z.bits | Self::ANG_X.bits | Self::ANG_Y.bits | Self::ANG_Z.bits;
+        const LOCKED_FIXED_AXES = Self::LIN_X.bits() | Self::LIN_Y.bits() | Self::LIN_Z.bits() | Self::ANG_X.bits() | Self::ANG_Y.bits() | Self::ANG_Z.bits();
         /// The set of degrees of freedom locked by a spherical joint.
-        const LOCKED_SPHERICAL_AXES = Self::X.bits | Self::Y.bits | Self::Z.bits;
+        const LOCKED_SPHERICAL_AXES = Self::LIN_X.bits() | Self::LIN_Y.bits() | Self::LIN_Z.bits();
         /// The set of degrees of freedom left free by a revolute joint.
-        const FREE_REVOLUTE_AXES = Self::ANG_X.bits;
+        const FREE_REVOLUTE_AXES = Self::ANG_X.bits();
         /// The set of degrees of freedom left free by a prismatic joint.
-        const FREE_PRISMATIC_AXES = Self::X.bits;
+        const FREE_PRISMATIC_AXES = Self::LIN_X.bits();
         /// The set of degrees of freedom left free by a fixed joint.
         const FREE_FIXED_AXES = 0;
         /// The set of degrees of freedom left free by a spherical joint.
-        const FREE_SPHERICAL_AXES = Self::ANG_X.bits | Self::ANG_Y.bits | Self::ANG_Z.bits;
+        const FREE_SPHERICAL_AXES = Self::ANG_X.bits() | Self::ANG_Y.bits() | Self::ANG_Z.bits();
         /// The set of all translational degrees of freedom.
-        const LIN_AXES = Self::X.bits() | Self::Y.bits() | Self::Z.bits();
+        const LIN_AXES = Self::LIN_X.bits() | Self::LIN_Y.bits() | Self::LIN_Z.bits();
         /// The set of all angular degrees of freedom.
         const ANG_AXES = Self::ANG_X.bits() | Self::ANG_Y.bits() | Self::ANG_Z.bits();
     }
@@ -52,27 +53,28 @@ bitflags::bitflags! {
 bitflags::bitflags! {
     /// A bit mask identifying multiple degrees of freedom of a joint.
     #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
+    #[derive(Copy, Clone, PartialEq, Eq, Debug)]
     pub struct JointAxesMask: u8 {
-        /// The translational degree of freedom along the local X axis of a joint.
-        const X = 1 << 0;
-        /// The translational degree of freedom along the local Y axis of a joint.
-        const Y = 1 << 1;
+        /// The linear (translational) degree of freedom along the local X axis of a joint.
+        const LIN_X = 1 << 0;
+        /// The linear (translational) degree of freedom along the local Y axis of a joint.
+        const LIN_Y = 1 << 1;
         /// The angular degree of freedom of a joint.
         const ANG_X = 1 << 2;
         /// The set of degrees of freedom locked by a revolute joint.
-        const LOCKED_REVOLUTE_AXES = Self::X.bits | Self::Y.bits;
+        const LOCKED_REVOLUTE_AXES = Self::LIN_X.bits() | Self::LIN_Y.bits();
         /// The set of degrees of freedom locked by a prismatic joint.
-        const LOCKED_PRISMATIC_AXES = Self::Y.bits | Self::ANG_X.bits;
+        const LOCKED_PRISMATIC_AXES = Self::LIN_Y.bits() | Self::ANG_X.bits();
         /// The set of degrees of freedom locked by a fixed joint.
-        const LOCKED_FIXED_AXES = Self::X.bits | Self::Y.bits | Self::ANG_X.bits;
+        const LOCKED_FIXED_AXES = Self::LIN_X.bits() | Self::LIN_Y.bits() | Self::ANG_X.bits();
         /// The set of degrees of freedom left free by a revolute joint.
-        const FREE_REVOLUTE_AXES = Self::ANG_X.bits;
+        const FREE_REVOLUTE_AXES = Self::ANG_X.bits();
         /// The set of degrees of freedom left free by a prismatic joint.
-        const FREE_PRISMATIC_AXES = Self::X.bits;
+        const FREE_PRISMATIC_AXES = Self::LIN_X.bits();
         /// The set of degrees of freedom left free by a fixed joint.
         const FREE_FIXED_AXES = 0;
         /// The set of all translational degrees of freedom.
-        const LIN_AXES = Self::X.bits() | Self::Y.bits();
+        const LIN_AXES = Self::LIN_X.bits() | Self::LIN_Y.bits();
         /// The set of all angular degrees of freedom.
         const ANG_AXES = Self::ANG_X.bits();
     }
@@ -88,13 +90,13 @@ impl Default for JointAxesMask {
 #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum JointAxis {
-    /// The translational degree of freedom along the joint’s local X axis.
-    X = 0,
-    /// The translational degree of freedom along the joint’s local Y axis.
-    Y,
-    /// The translational degree of freedom along the joint’s local Z axis.
+    /// The linear (translational) degree of freedom along the joint’s local X axis.
+    LinX = 0,
+    /// The linear (translational) degree of freedom along the joint’s local Y axis.
+    LinY,
+    /// The linear (translational) degree of freedom along the joint’s local Z axis.
     #[cfg(feature = "dim3")]
-    Z,
+    LinZ,
     /// The rotational degree of freedom along the joint’s local X axis.
     AngX,
     /// The rotational degree of freedom along the joint’s local Y axis.
@@ -524,7 +526,7 @@ macro_rules! joint_conversion_methods(
             if self.locked_axes == $axes {
                 // SAFETY: this is OK because the target joint type is
                 //         a `repr(transparent)` newtype of `Joint`.
-                Some(unsafe { std::mem::transmute(self) })
+                Some(unsafe { std::mem::transmute::<&Self, &$Joint>(self) })
             } else {
                 None
             }
@@ -536,7 +538,7 @@ macro_rules! joint_conversion_methods(
             if self.locked_axes == $axes {
                 // SAFETY: this is OK because the target joint type is
                 //         a `repr(transparent)` newtype of `Joint`.
-                Some(unsafe { std::mem::transmute(self) })
+                Some(unsafe { std::mem::transmute::<&mut Self, &mut $Joint>(self) })
             } else {
                 None
             }

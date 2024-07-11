@@ -519,7 +519,9 @@ impl KinematicCharacterController {
     ) -> bool {
         let normal = -(character_pos * manifold.local_n1);
 
-        if normal.dot(&self.up) >= 1.0e-5 {
+        // For the controller to be grounded, the angle between the contact normal and the up vector
+        // has to be smaller than acos(1.0e-3) = 89.94 degrees.
+        if normal.dot(&self.up) >= 1.0e-3 {
             let prediction = self.predict_ground(dims.y);
             for contact in &manifold.points {
                 if contact.dist <= prediction {
@@ -782,11 +784,40 @@ impl KinematicCharacterController {
         true
     }
 
-    /// For a given collision between a character and its environment, this method will apply
+    /// For the given collisions between a character and its environment, this method will apply
+    /// impulses to the rigid-bodies surrounding the character shape at the time of the collisions.
+    /// Note that the impulse calculation is only approximate as it is not based on a global
+    /// constraints resolution scheme.
+    pub fn solve_character_collision_impulses<'a>(
+        &self,
+        dt: Real,
+        bodies: &mut RigidBodySet,
+        colliders: &ColliderSet,
+        queries: &QueryPipeline,
+        character_shape: &dyn Shape,
+        character_mass: Real,
+        collisions: impl IntoIterator<Item = &'a CharacterCollision>,
+        filter: QueryFilter,
+    ) {
+        for collision in collisions {
+            self.solve_single_character_collision_impulse(
+                dt,
+                bodies,
+                colliders,
+                queries,
+                character_shape,
+                character_mass,
+                collision,
+                filter,
+            );
+        }
+    }
+
+    /// For the given collision between a character and its environment, this method will apply
     /// impulses to the rigid-bodies surrounding the character shape at the time of the collision.
     /// Note that the impulse calculation is only approximate as it is not based on a global
     /// constraints resolution scheme.
-    pub fn solve_character_collision_impulses(
+    fn solve_single_character_collision_impulse(
         &self,
         dt: Real,
         bodies: &mut RigidBodySet,

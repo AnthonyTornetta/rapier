@@ -1,7 +1,7 @@
 [package]
 name = "rapier_testbed3d"
-version = "0.19.0"
-authors = ["Sébastien Crozet <developer@crozet.re>"]
+version = "0.21.0"
+authors = ["Sébastien Crozet <sebcrozet@dimforge.com>"]
 description = "Testbed for the Rapier 3-dimensional physics engine in Rust."
 homepage = "http://rapier.org"
 repository = "https://github.com/dimforge/rapier"
@@ -28,11 +28,11 @@ other-backends = ["physx", "physx-sys", "glam"]
 features = ["parallel", "other-backends"]
 
 [dependencies]
-nalgebra = { version = "0.32", features = ["rand", "glam025"] }
+nalgebra = { version = "0.33", features = ["rand", "glam025"] }
 rand = "0.8"
 rand_pcg = "0.3"
 instant = { version = "0.1", features = ["web-sys", "now"] }
-bitflags = "1"
+bitflags = "2"
 glam = { version = "0.24", optional = true } # For Physx
 num_cpus = { version = "1", optional = true }
 physx = { version = "0.19", features = ["glam"], optional = true }
@@ -62,5 +62,5 @@ bevy = { version = "0.13", default-features = false, features = ["bevy_winit", "
 [dependencies.rapier]
 package = "rapier3d"
 path = "../rapier3d"
-version = "0.19.0"
+version = "0.21.0"
 features = ["serde-serialize", "debug-render", "profiler"]

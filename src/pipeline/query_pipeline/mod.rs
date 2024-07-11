@@ -1,3 +1,5 @@
+pub mod generators;
+
 use crate::dynamics::RigidBodyHandle;
 use crate::geometry::{
     Aabb, Collider, ColliderHandle, InteractionGroups, PointProjection, Qbvh, Ray, RayIntersection,
@@ -41,26 +43,26 @@ struct QueryPipelineAsCompositeShape<'a> {
 }
 
 bitflags::bitflags! {
-    #[derive(Default)]
+    #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
     /// Flags for excluding whole sets of colliders from a scene query.
     pub struct QueryFilterFlags: u32 {
         /// Exclude from the query any collider attached to a fixed rigid-body and colliders with no rigid-body attached.
-        const EXCLUDE_FIXED = 1 << 1;
+        const EXCLUDE_FIXED = 1 << 0;
         /// Exclude from the query any collider attached to a kinematic rigid-body.
-        const EXCLUDE_KINEMATIC = 1 << 2;
+        const EXCLUDE_KINEMATIC = 1 << 1;
         /// Exclude from the query any collider attached to a dynamic rigid-body.
-        const EXCLUDE_DYNAMIC = 1 << 3;
+        const EXCLUDE_DYNAMIC = 1 << 2;
         /// Exclude from the query any collider that is a sensor.
-        const EXCLUDE_SENSORS = 1 << 4;
+        const EXCLUDE_SENSORS = 1 << 3;
         /// Exclude from the query any collider that is not a sensor.
-        const EXCLUDE_SOLIDS = 1 << 5;
+        const EXCLUDE_SOLIDS = 1 << 4;
         /// Excludes all colliders not attached to a dynamic rigid-body.
-        const ONLY_DYNAMIC = Self::EXCLUDE_FIXED.bits | Self::EXCLUDE_KINEMATIC.bits;
+        const ONLY_DYNAMIC = Self::EXCLUDE_FIXED.bits() | Self::EXCLUDE_KINEMATIC.bits();
         /// Excludes all colliders not attached to a kinematic rigid-body.
-        const ONLY_KINEMATIC = Self::EXCLUDE_DYNAMIC.bits | Self::EXCLUDE_FIXED.bits;
+        const ONLY_KINEMATIC = Self::EXCLUDE_DYNAMIC.bits() | Self::EXCLUDE_FIXED.bits();
         /// Exclude all colliders attached to a non-fixed rigid-body
         /// (this will not exclude colliders not attached to any rigid-body).
-        const ONLY_FIXED = Self::EXCLUDE_DYNAMIC.bits | Self::EXCLUDE_KINEMATIC.bits;
+        const ONLY_FIXED = Self::EXCLUDE_DYNAMIC.bits() | Self::EXCLUDE_KINEMATIC.bits();
     }
 }
 
@@ -227,22 +229,6 @@ impl<'a> QueryFilter<'a> {
     }
 }
 
-/// Indicates how the colliders position should be taken into account when
-/// updating the query pipeline.
-pub enum QueryPipelineMode {
-    /// The `Collider::position` is taken into account.
-    CurrentPosition,
-    /// The `RigidBody::next_position * Collider::position_wrt_parent` is taken into account for
-    /// the colliders positions.
-    SweepTestWithNextPosition,
-    /// The `RigidBody::predict_position_using_velocity_and_forces * Collider::position_wrt_parent`
-    /// is taken into account for the colliders position.
-    SweepTestWithPredictedPosition {
-        /// The time used to integrate the rigid-body's velocity and acceleration.
-        dt: Real,
-    },
-}
-
 impl<'a> TypedSimdCompositeShape for QueryPipelineAsCompositeShape<'a> {
     type PartShape = dyn Shape;
     type PartNormalConstraints = dyn NormalConstraints;
@@ -357,72 +343,18 @@ impl QueryPipeline {
     }
 
     /// Update the acceleration structure on the query pipeline.
-    pub fn update(&mut self, bodies: &RigidBodySet, colliders: &ColliderSet) {
-        self.update_with_mode(bodies, colliders, QueryPipelineMode::CurrentPosition)
+    ///
+    /// Uses [`generators::CurrentAabb`] to update.
+    pub fn update(&mut self, colliders: &ColliderSet) {
+        self.update_with_generator(generators::CurrentAabb { colliders })
     }
 
-    /// Update the acceleration structure on the query pipeline.
-    pub fn update_with_mode(
-        &mut self,
-        bodies: &RigidBodySet,
-        colliders: &ColliderSet,
-        mode: QueryPipelineMode,
-    ) {
-        struct DataGenerator<'a> {
-            bodies: &'a RigidBodySet,
-            colliders: &'a ColliderSet,
-            mode: QueryPipelineMode,
-        }
-
-        impl<'a> QbvhDataGenerator<ColliderHandle> for DataGenerator<'a> {
-            fn size_hint(&self) -> usize {
-                self.colliders.len()
-            }
-
-            #[inline(always)]
-            fn for_each(&mut self, mut f: impl FnMut(ColliderHandle, Aabb)) {
-                match self.mode {
-                    QueryPipelineMode::CurrentPosition => {
-                        for (h, co) in self.colliders.iter_enabled() {
-                            f(h, co.shape.compute_aabb(&co.pos))
-                        }
-                    }
-                    QueryPipelineMode::SweepTestWithNextPosition => {
-                        for (h, co) in self.colliders.iter_enabled() {
-                            if let Some(co_parent) = co.parent {
-                                let rb_next_pos = &self.bodies[co_parent.handle].pos.next_position;
-                                let next_position = rb_next_pos * co_parent.pos_wrt_parent;
-                                f(h, co.shape.compute_swept_aabb(&co.pos, &next_position))
-                            } else {
-                                f(h, co.shape.compute_aabb(&co.pos))
-                            }
-                        }
-                    }
-                    QueryPipelineMode::SweepTestWithPredictedPosition { dt } => {
-                        for (h, co) in self.colliders.iter_enabled() {
-                            if let Some(co_parent) = co.parent {
-                                let rb = &self.bodies[co_parent.handle];
-                                let predicted_pos = rb.pos.integrate_forces_and_velocities(
-                                    dt, &rb.forces, &rb.vels, &rb.mprops,
-                                );
-
-                                let next_position = predicted_pos * co_parent.pos_wrt_parent;
-                                f(h, co.shape.compute_swept_aabb(&co.pos, &next_position))
-                            } else {
-                                f(h, co.shape.compute_aabb(&co.pos))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let generator = DataGenerator {
-            bodies,
-            colliders,
-            mode,
-        };
-        self.qbvh.clear_and_rebuild(generator, self.dilation_factor);
+    /// Update the acceleration structure on the query pipeline using a custom collider bounding
+    /// volume generator.
+    ///
+    /// See [`generators`] for available generators.
+    pub fn update_with_generator(&mut self, mode: impl QbvhDataGenerator<ColliderHandle>) {
+        self.qbvh.clear_and_rebuild(mode, self.dilation_factor);
     }
 
     /// Find the closest intersection between a ray and a set of collider.
@@ -667,10 +599,10 @@ impl QueryPipeline {
     /// * `shape_vel` - The constant velocity of the shape to cast (i.e. the cast direction).
     /// * `shape` - The shape to cast.
     /// * `max_toi` - The maximum time-of-impact that can be reported by this cast. This effectively
-    ///   limits the distance traveled by the shape to `shapeVel.norm() * maxToi`.
+    ///   limits the distance traveled by the shape to `shape_vel.norm() * maxToi`.
     /// * `stop_at_penetration` - If set to `false`, the linear shape-cast won’t immediately stop if
     ///   the shape is penetrating another shape at its starting point **and** its trajectory is such
-    ///   that it’s on a path to exist that penetration state.
+    ///   that it’s on a path to exit that penetration state.
     /// * `filter`: set of rules used to determine which collider is taken into account by this scene query.
     pub fn cast_shape(
         &self,
