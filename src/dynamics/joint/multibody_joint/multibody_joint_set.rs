@@ -1,3 +1,5 @@
+use parry::utils::hashmap::HashMap;
+
 use crate::data::{Arena, Coarena, Index};
 use crate::dynamics::joint::MultibodyLink;
 use crate::dynamics::{GenericJoint, Multibody, MultibodyJoint, RigidBodyHandle};
@@ -55,12 +57,13 @@ impl IndexedData for MultibodyJointHandle {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 /// Indexes usable to get a multibody link from a `MultibodyJointSet`.
 ///
-/// ```.skip
+/// ```ignore
 /// // With:
 /// //     multibody_joint_set: MultibodyJointSet
 /// //     multibody_link_id: MultibodyLinkId
 /// let multibody = &multibody_joint_set[multibody_link_id.multibody];
 /// let link = multibody.link(multibody_link_id.id).expect("Link not found.");
+/// ```
 pub struct MultibodyLinkId {
     pub(crate) graph_id: RigidBodyGraphIndex,
     /// The multibody index to be used as `&multibody_joint_set[multibody]` to
@@ -86,14 +89,14 @@ impl Default for MultibodyLinkId {
 #[derive(Default)]
 /// A set of rigid bodies that can be handled by a physics pipeline.
 #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MultibodyJointSet {
     pub(crate) multibodies: Arena<Multibody>, // NOTE: a Slab would be sufficient.
     pub(crate) rb2mb: Coarena<MultibodyLinkId>,
     // NOTE: this is mostly for the island extraction. So perhaps we won’t need
     //       that any more in the future when we improve our island builder.
     pub(crate) connectivity_graph: InteractionGraph<RigidBodyHandle, ()>,
-    pub(crate) to_wake_up: Vec<RigidBodyHandle>,
+    pub(crate) to_wake_up: HashMap<RigidBodyHandle, ()>,
 }
 
 impl MultibodyJointSet {
@@ -103,7 +106,7 @@ impl MultibodyJointSet {
             multibodies: Arena::new(),
             rb2mb: Coarena::new(),
             connectivity_graph: InteractionGraph::new(),
-            to_wake_up: vec![],
+            to_wake_up: HashMap::default(),
         }
     }
 
@@ -199,8 +202,8 @@ impl MultibodyJointSet {
         multibody1.append(mb2, link1.id, MultibodyJoint::new(data.into(), kinematic));
 
         if wake_up {
-            self.to_wake_up.push(body1);
-            self.to_wake_up.push(body2);
+            self.to_wake_up.insert(body1, ());
+            self.to_wake_up.insert(body2, ());
         }
 
         // Because each rigid-body can only have one parent link,
@@ -222,8 +225,8 @@ impl MultibodyJointSet {
                     .remove_edge(parent_graph_id, removed.graph_id);
 
                 if wake_up {
-                    self.to_wake_up.push(RigidBodyHandle(handle.0));
-                    self.to_wake_up.push(parent_rb);
+                    self.to_wake_up.insert(RigidBodyHandle(handle.0), ());
+                    self.to_wake_up.insert(parent_rb, ());
                 }
 
                 // TODO: remove the node if it no longer has any attached edges?
@@ -264,7 +267,7 @@ impl MultibodyJointSet {
                 let rb_handle = link.rigid_body;
 
                 if wake_up {
-                    self.to_wake_up.push(rb_handle);
+                    self.to_wake_up.insert(rb_handle, ());
                 }
 
                 // Remove the rigid-body <-> multibody mapping for this link.
@@ -289,8 +292,8 @@ impl MultibodyJointSet {
                 // There is a multibody_joint handle is equal to the second rigid-body’s handle.
                 articulations_to_remove.push(MultibodyJointHandle(rb2.0));
 
-                self.to_wake_up.push(rb1);
-                self.to_wake_up.push(rb2);
+                self.to_wake_up.insert(rb1, ());
+                self.to_wake_up.insert(rb2, ());
             }
 
             for articulation_handle in articulations_to_remove {
@@ -373,7 +376,7 @@ impl MultibodyJointSet {
         ))
     }
 
-    /// Returns the the joint between two rigid-bodies (if it exists).
+    /// Returns the joint between two rigid-bodies (if it exists).
     pub fn joint_between(
         &self,
         rb1: RigidBodyHandle,

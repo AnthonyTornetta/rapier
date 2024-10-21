@@ -13,6 +13,9 @@ use na::{
     StorageMut, LU,
 };
 
+#[cfg(doc)]
+use crate::prelude::{GenericJoint, RigidBody};
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 struct Force {
@@ -59,7 +62,7 @@ fn concat_rb_mass_matrix(
 
 /// An articulated body simulated using the reduced-coordinates approach.
 #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Multibody {
     // TODO: serialization: skip the workspace fields.
     pub(crate) links: MultibodyLinkVec,
@@ -861,8 +864,7 @@ impl Multibody {
     /// Apply displacements, in generalized coordinates, to this multibody.
     ///
     /// Note this does **not** updates the link poses, only their generalized coordinates.
-    /// To update the link poses and associated rigid-bodies, call [`Self::forward_kinematics`]
-    /// or [`Self::finalize`].
+    /// To update the link poses and associated rigid-bodies, call [`Self::forward_kinematics`].
     pub fn apply_displacements(&mut self, disp: &[Real]) {
         for link in self.links.iter_mut() {
             link.joint.apply_displacement(&disp[link.assembly_id..])

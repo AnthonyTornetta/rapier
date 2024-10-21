@@ -15,7 +15,7 @@
 //! these elements are very welcome!
 //!
 //! - Mesh file types other than `stl` are not supported yet. Contributions are welcome. You my check the `rapier3d-stl`
-//! repository for an example of mesh loader.
+//!   repository for an example of mesh loader.
 //! - When inserting joints as multibody joints, they will be reset to their neutral position (all coordinates = 0).
 //! - The following fields are currently ignored:
 //!     - `Joint::dynamics`
@@ -32,16 +32,16 @@ use rapier3d::{
         JointAxis, MassProperties, MultibodyJointHandle, MultibodyJointSet, RigidBody,
         RigidBodyBuilder, RigidBodyHandle, RigidBodySet, RigidBodyType,
     },
-    geometry::{
-        Collider, ColliderBuilder, ColliderHandle, ColliderSet, MeshConverter, SharedShape,
-        TriMeshFlags,
-    },
+    geometry::{Collider, ColliderBuilder, ColliderHandle, ColliderSet, SharedShape, TriMeshFlags},
     math::{Isometry, Point, Real, Vector},
     na,
 };
 use std::collections::HashMap;
 use std::path::Path;
 use xurdf::{Geometry, Inertial, Joint, Pose, Robot};
+
+#[cfg(doc)]
+use rapier3d::dynamics::Multibody;
 
 bitflags::bitflags! {
     /// Options applied to multibody joints created from the URDF joints.
@@ -79,7 +79,7 @@ pub struct UrdfLoaderOptions {
     /// So if this option is set to `true`, it is recommended to also keep
     /// [`UrdfLoaderOptions::enable_joint_collisions`] set to `false`. If the model is then added
     /// to the physics sets using multibody joints, it is recommended to call
-    /// [`UrdfRobot::insert_with_multibody_joints`] with the [`UrdfMultibodyOptions::DISABLE_SELF_CONTACTS`]
+    /// [`UrdfRobot::insert_using_multibody_joints`] with the [`UrdfMultibodyOptions::DISABLE_SELF_CONTACTS`]
     /// flag enabled.
     pub create_colliders_from_visual_shapes: bool,
     /// If `true`, the mass properties (center-of-mass, mass, and angular inertia) read from the urdf
@@ -490,7 +490,7 @@ fn urdf_to_rigid_body(options: &UrdfLoaderOptions, inertial: &Inertial) -> Rigid
 
 fn urdf_to_collider(
     options: &UrdfLoaderOptions,
-    mesh_dir: &Path,
+    _mesh_dir: &Path, // NOTO: this isn’t used if there is no external mesh feature enabled (like stl).
     geometry: &Geometry,
     origin: &Pose,
 ) -> Option<Collider> {
@@ -511,17 +511,18 @@ fn urdf_to_collider(
         Geometry::Sphere { radius } => SharedShape::ball(*radius as Real),
         Geometry::Mesh { filename, scale } => {
             let path: &Path = filename.as_ref();
-            let scale = scale
+            let _scale = scale
                 .map(|s| Vector::new(s.x as Real, s.y as Real, s.z as Real))
                 .unwrap_or_else(|| Vector::<Real>::repeat(1.0));
             match path.extension().and_then(|ext| ext.to_str()) {
                 #[cfg(feature = "stl")]
                 Some("stl") | Some("STL") => {
-                    let full_path = mesh_dir.join(filename);
+                    use rapier3d::geometry::MeshConverter;
+                    let full_path = _mesh_dir.join(filename);
                     match rapier3d_stl::load_from_path(
                         full_path,
                         MeshConverter::TriMeshWithFlags(options.trimesh_flags),
-                        scale,
+                        _scale,
                     ) {
                         Ok(stl_shape) => {
                             shape_transform = stl_shape.pose;

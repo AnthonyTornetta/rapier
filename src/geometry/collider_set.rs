@@ -5,7 +5,7 @@ use crate::math::Isometry;
 use std::ops::{Index, IndexMut};
 
 #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 /// A set of colliders that can be handled by a physics `World`.
 pub struct ColliderSet {
     pub(crate) colliders: Arena<Collider>,
@@ -19,6 +19,17 @@ impl ColliderSet {
         ColliderSet {
             colliders: Arena::new(),
             modified_colliders: Vec::new(),
+            removed_colliders: Vec::new(),
+        }
+    }
+
+    /// Create a new set of colliders, with an initial capacity
+    /// for the set of colliders as well as the tracking of
+    /// modified colliders.
+    pub fn with_capacity(capacity: usize) -> Self {
+        ColliderSet {
+            colliders: Arena::with_capacity(capacity),
+            modified_colliders: Vec::with_capacity(capacity),
             removed_colliders: Vec::new(),
         }
     }
