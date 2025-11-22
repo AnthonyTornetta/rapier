@@ -447,7 +447,7 @@ impl InteractionGroups {
                 let i2 = active_set_offset2;
 
                 // This is stupid, but I don't care
-                if i1 >= self.body_masks.len() || i2 >= self.body_masks.len() {
+                if i1 as usize >= self.body_masks.len() || i2 as usize >= self.body_masks.len() {
                     continue;
                 }
 
