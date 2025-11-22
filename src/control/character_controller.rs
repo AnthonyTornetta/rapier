@@ -1,7 +1,6 @@
-use crate::dynamics::RigidBodySet;
-use crate::geometry::{ColliderHandle, ColliderSet, ContactManifold, Shape, ShapeCastHit};
+use crate::geometry::{ColliderHandle, ContactManifold, Shape, ShapeCastHit};
 use crate::math::{Isometry, Point, Real, UnitVector, Vector};
-use crate::pipeline::{QueryFilter, QueryFilterFlags, QueryPipeline};
+use crate::pipeline::{QueryFilterFlags, QueryPipeline, QueryPipelineMut};
 use crate::utils;
 use na::{RealField, Vector2};
 use parry::bounding_volume::BoundingVolume;
@@ -115,7 +114,61 @@ pub struct CharacterCollision {
     pub hit: ShapeCastHit,
 }
 
-/// A character controller for kinematic bodies.
+/// A kinematic character controller for player/NPC movement (walking, climbing, sliding).
+///
+/// This provides classic game character movement: walking on floors, sliding on slopes,
+/// climbing stairs, and snapping to ground. It's kinematic (not physics-based), meaning
+/// you control movement directly rather than applying forces.
+///
+/// **Not suitable for:** Ragdolls, vehicles, or physics-driven movement (use dynamic bodies instead).
+///
+/// # How it works
+///
+/// 1. You provide desired movement (e.g., "move forward 5 units")
+/// 2. Controller casts the character shape through the world
+/// 3. It handles collisions: sliding along walls, stepping up stairs, snapping to ground
+/// 4. Returns the final movement to apply
+///
+/// # Example
+///
+/// ```
+/// # use rapier3d::prelude::*;
+/// # use rapier3d::control::{CharacterAutostep, KinematicCharacterController};
+/// # use nalgebra::Isometry3;
+/// # let mut bodies = RigidBodySet::new();
+/// # let mut colliders = ColliderSet::new();
+/// # let broad_phase = BroadPhaseBvh::new();
+/// # let narrow_phase = NarrowPhase::new();
+/// # let dt = 1.0 / 60.0;
+/// # let speed = 5.0;
+/// # let (input_x, input_z) = (1.0, 0.0);
+/// # let character_shape = Ball::new(0.5);
+/// # let mut character_pos = Isometry3::identity();
+/// # let query_pipeline = broad_phase.as_query_pipeline(
+/// #     narrow_phase.query_dispatcher(),
+/// #     &bodies,
+/// #     &colliders,
+/// #     QueryFilter::default(),
+/// # );
+/// let controller = KinematicCharacterController {
+///     slide: true,  // Slide along walls instead of stopping
+///     autostep: Some(CharacterAutostep::default()),  // Auto-climb stairs
+///     max_slope_climb_angle: 45.0_f32.to_radians(),  // Max climbable slope
+///     ..Default::default()
+/// };
+///
+/// // In your game loop:
+/// let desired_movement = vector![input_x, 0.0, input_z] * speed * dt;
+/// let movement = controller.move_shape(
+///     dt,
+///     &query_pipeline,
+///     &character_shape,
+///     &character_pos,
+///     desired_movement,
+///     |_| {}  // Collision event callback
+/// );
+/// character_pos.translation.vector += movement.translation;
+/// ```
 #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
 #[derive(Copy, Clone, Debug)]
 pub struct KinematicCharacterController {
@@ -211,16 +264,14 @@ impl KinematicCharacterController {
     }
 
     /// Computes the possible movement for a shape.
+    #[profiling::function]
     pub fn move_shape(
         &self,
         dt: Real,
-        bodies: &RigidBodySet,
-        colliders: &ColliderSet,
         queries: &QueryPipeline,
         character_shape: &dyn Shape,
         character_pos: &Isometry<Real>,
         desired_translation: Vector<Real>,
-        filter: QueryFilter,
         mut events: impl FnMut(CharacterCollision),
     ) -> EffectiveCharacterMovement {
         let mut result = EffectiveCharacterMovement {
@@ -237,13 +288,10 @@ impl KinematicCharacterController {
 
         let grounded_at_starting_pos = self.detect_grounded_status_and_apply_friction(
             dt,
-            bodies,
-            colliders,
             queries,
             character_shape,
             character_pos,
             &dims,
-            filter,
             None,
             None,
         );
@@ -251,6 +299,7 @@ impl KinematicCharacterController {
         let mut max_iters = 20;
         let mut kinematic_friction_translation = Vector::zeros();
         let offset = self.offset.eval(dims.y);
+        let mut is_moving = false;
 
         while let Some((translation_dir, translation_dist)) =
             UnitVector::try_new_and_get(translation_remaining, 1.0e-5)
@@ -260,11 +309,10 @@ impl KinematicCharacterController {
             } else {
                 max_iters -= 1;
             }
+            is_moving = true;
 
             // 2. Cast towards the movement direction.
             if let Some((handle, hit)) = queries.cast_shape(
-                bodies,
-                colliders,
                 &(Translation::from(result.translation) * character_pos),
                 &translation_dir,
                 character_shape,
@@ -274,7 +322,6 @@ impl KinematicCharacterController {
                     max_time_of_impact: translation_dist,
                     compute_impact_geometry_on_penetration: true,
                 },
-                filter,
             ) {
                 // We hit something, compute and apply the allowed interference-free translation.
                 let allowed_dist = hit.time_of_impact;
@@ -294,13 +341,10 @@ impl KinematicCharacterController {
 
                 // Try to go upstairs.
                 if !self.handle_stairs(
-                    bodies,
-                    colliders,
-                    queries,
+                    *queries,
                     character_shape,
                     &(Translation::from(result.translation) * character_pos),
                     &dims,
-                    filter,
                     handle,
                     &hit_info,
                     &mut translation_remaining,
@@ -319,18 +363,23 @@ impl KinematicCharacterController {
                 // No interference along the path.
                 result.translation += translation_remaining;
                 translation_remaining.fill(0.0);
+                result.grounded = self.detect_grounded_status_and_apply_friction(
+                    dt,
+                    queries,
+                    character_shape,
+                    &(Translation::from(result.translation) * character_pos),
+                    &dims,
+                    None,
+                    None,
+                );
                 break;
             }
-
             result.grounded = self.detect_grounded_status_and_apply_friction(
                 dt,
-                bodies,
-                colliders,
                 queries,
                 character_shape,
                 &(Translation::from(result.translation) * character_pos),
                 &dims,
-                filter,
                 Some(&mut kinematic_friction_translation),
                 Some(&mut translation_remaining),
             );
@@ -339,16 +388,26 @@ impl KinematicCharacterController {
                 break;
             }
         }
-        // If needed, and if we are not already grounded, snap to the ground.
-        if grounded_at_starting_pos {
-            self.snap_to_ground(
-                bodies,
-                colliders,
+        // When not moving, `detect_grounded_status_and_apply_friction` is not reached
+        // so we call it explicitly here.
+        if !is_moving {
+            result.grounded = self.detect_grounded_status_and_apply_friction(
+                dt,
                 queries,
                 character_shape,
                 &(Translation::from(result.translation) * character_pos),
                 &dims,
-                filter,
+                None,
+                None,
+            );
+        }
+        // If needed, and if we are not already grounded, snap to the ground.
+        if grounded_at_starting_pos {
+            self.snap_to_ground(
+                queries,
+                character_shape,
+                &(Translation::from(result.translation) * character_pos),
+                &dims,
                 &mut result,
             );
         }
@@ -359,13 +418,10 @@ impl KinematicCharacterController {
 
     fn snap_to_ground(
         &self,
-        bodies: &RigidBodySet,
-        colliders: &ColliderSet,
         queries: &QueryPipeline,
         character_shape: &dyn Shape,
         character_pos: &Isometry<Real>,
         dims: &Vector2<Real>,
-        filter: QueryFilter,
         result: &mut EffectiveCharacterMovement,
     ) -> Option<(ColliderHandle, ShapeCastHit)> {
         if let Some(snap_distance) = self.snap_to_ground {
@@ -373,8 +429,6 @@ impl KinematicCharacterController {
                 let snap_distance = snap_distance.eval(dims.y);
                 let offset = self.offset.eval(dims.y);
                 if let Some((hit_handle, hit)) = queries.cast_shape(
-                    bodies,
-                    colliders,
                     character_pos,
                     &-self.up,
                     character_shape,
@@ -384,7 +438,6 @@ impl KinematicCharacterController {
                         max_time_of_impact: snap_distance,
                         compute_impact_geometry_on_penetration: true,
                     },
-                    filter,
                 ) {
                     // Apply the snap.
                     result.translation -= *self.up * hit.time_of_impact;
@@ -398,19 +451,17 @@ impl KinematicCharacterController {
     }
 
     fn predict_ground(&self, up_extends: Real) -> Real {
-        self.offset.eval(up_extends) * 1.2
+        self.offset.eval(up_extends) + 0.05
     }
 
+    #[profiling::function]
     fn detect_grounded_status_and_apply_friction(
         &self,
         dt: Real,
-        bodies: &RigidBodySet,
-        colliders: &ColliderSet,
         queries: &QueryPipeline,
         character_shape: &dyn Shape,
         character_pos: &Isometry<Real>,
         dims: &Vector2<Real>,
-        filter: QueryFilter,
         mut kinematic_friction_translation: Option<&mut Vector<Real>>,
         mut translation_remaining: Option<&mut Vector<Real>>,
     ) -> bool {
@@ -426,89 +477,82 @@ impl KinematicCharacterController {
 
         let mut grounded = false;
 
-        queries.colliders_with_aabb_intersecting_aabb(&character_aabb, |handle| {
-            if let Some(collider) = colliders.get(*handle) {
-                if filter.test(bodies, *handle, collider) {
-                    manifolds.clear();
-                    let pos12 = character_pos.inv_mul(collider.position());
-                    let _ = dispatcher.contact_manifolds(
-                        &pos12,
-                        character_shape,
-                        collider.shape(),
-                        prediction,
-                        &mut manifolds,
-                        &mut None,
-                    );
+        'outer: for (_, collider) in queries.intersect_aabb_conservative(character_aabb) {
+            manifolds.clear();
+            let pos12 = character_pos.inv_mul(collider.position());
+            let _ = dispatcher.contact_manifolds(
+                &pos12,
+                character_shape,
+                collider.shape(),
+                prediction,
+                &mut manifolds,
+                &mut None,
+            );
 
-                    if let (Some(kinematic_friction_translation), Some(translation_remaining)) = (
-                        kinematic_friction_translation.as_deref_mut(),
-                        translation_remaining.as_deref_mut(),
-                    ) {
-                        let init_kinematic_friction_translation = *kinematic_friction_translation;
-                        let kinematic_parent = collider
-                            .parent
-                            .and_then(|p| bodies.get(p.handle))
-                            .filter(|rb| rb.is_kinematic());
+            if let (Some(kinematic_friction_translation), Some(translation_remaining)) = (
+                kinematic_friction_translation.as_deref_mut(),
+                translation_remaining.as_deref_mut(),
+            ) {
+                let init_kinematic_friction_translation = *kinematic_friction_translation;
+                let kinematic_parent = collider
+                    .parent
+                    .and_then(|p| queries.bodies.get(p.handle))
+                    .filter(|rb| rb.is_kinematic());
 
-                        for m in &manifolds {
-                            if self.is_grounded_at_contact_manifold(m, character_pos, dims) {
-                                grounded = true;
-                            }
+                for m in &manifolds {
+                    if self.is_grounded_at_contact_manifold(m, character_pos, dims) {
+                        grounded = true;
+                    }
 
-                            if let Some(kinematic_parent) = kinematic_parent {
-                                let mut num_active_contacts = 0;
-                                let mut manifold_center = Point::origin();
-                                let normal = -(character_pos * m.local_n1);
+                    if let Some(kinematic_parent) = kinematic_parent {
+                        let mut num_active_contacts = 0;
+                        let mut manifold_center = Point::origin();
+                        let normal = -(character_pos * m.local_n1);
 
-                                for contact in &m.points {
-                                    if contact.dist <= prediction {
-                                        num_active_contacts += 1;
-                                        let contact_point = collider.position() * contact.local_p2;
-                                        let target_vel =
-                                            kinematic_parent.velocity_at_point(&contact_point);
+                        for contact in &m.points {
+                            if contact.dist <= prediction {
+                                num_active_contacts += 1;
+                                let contact_point = collider.position() * contact.local_p2;
+                                let target_vel = kinematic_parent.velocity_at_point(&contact_point);
 
-                                        let normal_target_mvt = target_vel.dot(&normal) * dt;
-                                        let normal_current_mvt = translation_remaining.dot(&normal);
+                                let normal_target_mvt = target_vel.dot(&normal) * dt;
+                                let normal_current_mvt = translation_remaining.dot(&normal);
 
-                                        manifold_center += contact_point.coords;
-                                        *translation_remaining +=
-                                            normal * (normal_target_mvt - normal_current_mvt);
-                                    }
-                                }
-
-                                if num_active_contacts > 0 {
-                                    let target_vel = kinematic_parent.velocity_at_point(
-                                        &(manifold_center / num_active_contacts as Real),
-                                    );
-                                    let tangent_platform_mvt =
-                                        (target_vel - normal * target_vel.dot(&normal)) * dt;
-                                    kinematic_friction_translation.zip_apply(
-                                        &tangent_platform_mvt,
-                                        |y, x| {
-                                            if x.abs() > (*y).abs() {
-                                                *y = x;
-                                            }
-                                        },
-                                    );
-                                }
+                                manifold_center += contact_point.coords;
+                                *translation_remaining +=
+                                    normal * (normal_target_mvt - normal_current_mvt);
                             }
                         }
 
-                        *translation_remaining +=
-                            *kinematic_friction_translation - init_kinematic_friction_translation;
-                    } else {
-                        for m in &manifolds {
-                            if self.is_grounded_at_contact_manifold(m, character_pos, dims) {
-                                grounded = true;
-                                return false; // We can stop the search early.
-                            }
+                        if num_active_contacts > 0 {
+                            let target_vel = kinematic_parent.velocity_at_point(
+                                &(manifold_center / num_active_contacts as Real),
+                            );
+                            let tangent_platform_mvt =
+                                (target_vel - normal * target_vel.dot(&normal)) * dt;
+                            kinematic_friction_translation.zip_apply(
+                                &tangent_platform_mvt,
+                                |y, x| {
+                                    if x.abs() > (*y).abs() {
+                                        *y = x;
+                                    }
+                                },
+                            );
                         }
                     }
                 }
-            }
-            true
-        });
 
+                *translation_remaining +=
+                    *kinematic_friction_translation - init_kinematic_friction_translation;
+            } else {
+                for m in &manifolds {
+                    if self.is_grounded_at_contact_manifold(m, character_pos, dims) {
+                        grounded = true;
+                        break 'outer; // We can stop the search early.
+                    }
+                }
+            }
+        }
         grounded
     }
 
@@ -629,15 +673,13 @@ impl KinematicCharacterController {
         Vector2::new(side_extent, up_extent)
     }
 
+    #[profiling::function]
     fn handle_stairs(
         &self,
-        bodies: &RigidBodySet,
-        colliders: &ColliderSet,
-        queries: &QueryPipeline,
+        mut queries: QueryPipeline,
         character_shape: &dyn Shape,
         character_pos: &Isometry<Real>,
         dims: &Vector2<Real>,
-        mut filter: QueryFilter,
         stair_handle: ColliderHandle,
         hit: &HitInfo,
         translation_remaining: &mut Vector<Real>,
@@ -657,10 +699,11 @@ impl KinematicCharacterController {
         let max_height = autostep.max_height.eval(dims.y) + offset;
 
         if !autostep.include_dynamic_bodies {
-            if colliders
+            if queries
+                .colliders
                 .get(stair_handle)
                 .and_then(|co| co.parent)
-                .and_then(|p| bodies.get(p.handle))
+                .and_then(|p| queries.bodies.get(p.handle))
                 .map(|b| b.is_dynamic())
                 == Some(true)
             {
@@ -668,7 +711,7 @@ impl KinematicCharacterController {
                 return false;
             }
 
-            filter.flags |= QueryFilterFlags::EXCLUDE_DYNAMIC;
+            queries.filter.flags |= QueryFilterFlags::EXCLUDE_DYNAMIC;
         }
 
         let shifted_character_pos = Translation::from(*self.up * max_height) * character_pos;
@@ -681,8 +724,6 @@ impl KinematicCharacterController {
 
         if queries
             .cast_shape(
-                bodies,
-                colliders,
                 character_pos,
                 &self.up,
                 character_shape,
@@ -692,7 +733,6 @@ impl KinematicCharacterController {
                     max_time_of_impact: max_height,
                     compute_impact_geometry_on_penetration: true,
                 },
-                filter,
             )
             .is_some()
         {
@@ -702,8 +742,6 @@ impl KinematicCharacterController {
 
         if queries
             .cast_shape(
-                bodies,
-                colliders,
                 &shifted_character_pos,
                 &horizontal_dir,
                 character_shape,
@@ -713,7 +751,6 @@ impl KinematicCharacterController {
                     max_time_of_impact: min_width,
                     compute_impact_geometry_on_penetration: true,
                 },
-                filter,
             )
             .is_some()
         {
@@ -724,8 +761,6 @@ impl KinematicCharacterController {
         // Check that we are not getting into a ramp that is too steep
         // after stepping.
         if let Some((_, hit)) = queries.cast_shape(
-            bodies,
-            colliders,
             &(Translation::from(horizontal_dir * min_width) * shifted_character_pos),
             &-self.up,
             character_shape,
@@ -735,7 +770,6 @@ impl KinematicCharacterController {
                 max_time_of_impact: max_height,
                 compute_impact_geometry_on_penetration: true,
             },
-            filter,
         ) {
             let [vertical_slope_translation, horizontal_slope_translation] = self
                 .split_into_components(translation_remaining)
@@ -755,8 +789,6 @@ impl KinematicCharacterController {
         let step_height = max_height
             - queries
                 .cast_shape(
-                    bodies,
-                    colliders,
                     &(Translation::from(horizontal_dir * min_width) * shifted_character_pos),
                     &-self.up,
                     character_shape,
@@ -766,7 +798,6 @@ impl KinematicCharacterController {
                         max_time_of_impact: max_height,
                         compute_impact_geometry_on_penetration: true,
                     },
-                    filter,
                 )
                 .map(|hit| hit.1.time_of_impact)
                 .unwrap_or(max_height);
@@ -789,27 +820,22 @@ impl KinematicCharacterController {
     /// impulses to the rigid-bodies surrounding the character shape at the time of the collisions.
     /// Note that the impulse calculation is only approximate as it is not based on a global
     /// constraints resolution scheme.
+    #[profiling::function]
     pub fn solve_character_collision_impulses<'a>(
         &self,
         dt: Real,
-        bodies: &mut RigidBodySet,
-        colliders: &ColliderSet,
-        queries: &QueryPipeline,
+        queries: &mut QueryPipelineMut,
         character_shape: &dyn Shape,
         character_mass: Real,
         collisions: impl IntoIterator<Item = &'a CharacterCollision>,
-        filter: QueryFilter,
     ) {
         for collision in collisions {
             self.solve_single_character_collision_impulse(
                 dt,
-                bodies,
-                colliders,
                 queries,
                 character_shape,
                 character_mass,
                 collision,
-                filter,
             );
         }
     }
@@ -818,16 +844,14 @@ impl KinematicCharacterController {
     /// impulses to the rigid-bodies surrounding the character shape at the time of the collision.
     /// Note that the impulse calculation is only approximate as it is not based on a global
     /// constraints resolution scheme.
+    #[profiling::function]
     fn solve_single_character_collision_impulse(
         &self,
         dt: Real,
-        bodies: &mut RigidBodySet,
-        colliders: &ColliderSet,
-        queries: &QueryPipeline,
+        queries: &mut QueryPipelineMut,
         character_shape: &dyn Shape,
         character_mass: Real,
         collision: &CharacterCollision,
-        filter: QueryFilter,
     ) {
         let extents = character_shape.compute_local_aabb().extents();
         let up_extent = extents.dot(&self.up.abs());
@@ -843,41 +867,36 @@ impl KinematicCharacterController {
             .compute_aabb(&collision.character_pos)
             .loosened(prediction);
 
-        queries.colliders_with_aabb_intersecting_aabb(&character_aabb, |handle| {
-            if let Some(collider) = colliders.get(*handle) {
-                if let Some(parent) = collider.parent {
-                    if filter.test(bodies, *handle, collider) {
-                        if let Some(body) = bodies.get(parent.handle) {
-                            if body.is_dynamic() {
-                                manifolds.clear();
-                                let pos12 = collision.character_pos.inv_mul(collider.position());
-                                let prev_manifolds_len = manifolds.len();
-                                let _ = dispatcher.contact_manifolds(
-                                    &pos12,
-                                    character_shape,
-                                    collider.shape(),
-                                    prediction,
-                                    &mut manifolds,
-                                    &mut None,
-                                );
+        for (_, collider) in queries.as_ref().intersect_aabb_conservative(character_aabb) {
+            if let Some(parent) = collider.parent {
+                if let Some(body) = queries.bodies.get(parent.handle) {
+                    if body.is_dynamic() {
+                        manifolds.clear();
+                        let pos12 = collision.character_pos.inv_mul(collider.position());
+                        let prev_manifolds_len = manifolds.len();
+                        let _ = dispatcher.contact_manifolds(
+                            &pos12,
+                            character_shape,
+                            collider.shape(),
+                            prediction,
+                            &mut manifolds,
+                            &mut None,
+                        );
 
-                                for m in &mut manifolds[prev_manifolds_len..] {
-                                    m.data.rigid_body2 = Some(parent.handle);
-                                    m.data.normal = collision.character_pos * m.local_n1;
-                                }
-                            }
+                        for m in &mut manifolds[prev_manifolds_len..] {
+                            m.data.rigid_body2 = Some(parent.handle);
+                            m.data.normal = collision.character_pos * m.local_n1;
                         }
                     }
                 }
             }
-            true
-        });
+        }
 
         let velocity_to_transfer = movement_to_transfer * utils::inv(dt);
 
         for manifold in &manifolds {
             let body_handle = manifold.data.rigid_body2.unwrap();
-            let body = &mut bodies[body_handle];
+            let body = &mut queries.bodies[body_handle];
 
             for pt in &manifold.points {
                 if pt.dist <= prediction {
@@ -909,7 +928,10 @@ fn subtract_hit(translation: Vector<Real>, hit: &ShapeCastHit) -> Vector<Real> {
 #[cfg(all(feature = "dim3", feature = "f32"))]
 #[cfg(test)]
 mod test {
-    use crate::{control::KinematicCharacterController, prelude::*};
+    use crate::{
+        control::{CharacterLength, KinematicCharacterController},
+        prelude::*,
+    };
 
     #[test]
     fn character_controller_climb_test() {
@@ -917,10 +939,9 @@ mod test {
         let mut impulse_joints = ImpulseJointSet::new();
         let mut multibody_joints = MultibodyJointSet::new();
         let mut pipeline = PhysicsPipeline::new();
-        let mut bf = BroadPhaseMultiSap::new();
+        let mut bf = BroadPhaseBvh::new();
         let mut nf = NarrowPhase::new();
         let mut islands = IslandManager::new();
-        let mut query_pipeline = QueryPipeline::new();
 
         let mut bodies = RigidBodySet::new();
 
@@ -983,8 +1004,23 @@ mod test {
         let character_shape = collider.shape();
         colliders.insert_with_parent(collider.clone(), character_handle_cannot_climb, &mut bodies);
 
-        query_pipeline.update(&colliders);
         for i in 0..200 {
+            // Step once
+            pipeline.step(
+                &gravity,
+                &integration_parameters,
+                &mut islands,
+                &mut bf,
+                &mut nf,
+                &mut bodies,
+                &mut colliders,
+                &mut impulse_joints,
+                &mut multibody_joints,
+                &mut CCDSolver::new(),
+                &(),
+                &(),
+            );
+
             let mut update_character_controller =
                 |controller: KinematicCharacterController, handle: RigidBodyHandle| {
                     let character_body = bodies.get(handle).unwrap();
@@ -992,23 +1028,27 @@ mod test {
                     // the character is being moved.
                     let mut collisions = vec![];
                     let filter_character_controller = QueryFilter::new().exclude_rigid_body(handle);
-                    let effective_movement = controller.move_shape(
-                        integration_parameters.dt,
+                    let query_pipeline = bf.as_query_pipeline(
+                        nf.query_dispatcher(),
                         &bodies,
                         &colliders,
+                        filter_character_controller,
+                    );
+                    let effective_movement = controller.move_shape(
+                        integration_parameters.dt,
                         &query_pipeline,
                         character_shape,
                         character_body.position(),
                         Vector::new(0.1, -0.1, 0.0),
-                        filter_character_controller,
                         |collision| collisions.push(collision),
                     );
                     let character_body = bodies.get_mut(handle).unwrap();
                     let translation = character_body.translation();
-                    assert_eq!(
-                        effective_movement.grounded, true,
+                    assert!(
+                        effective_movement.grounded,
                         "movement should be grounded at all times for current setup (iter: {}), pos: {}.",
-                        i, translation + effective_movement.translation
+                        i,
+                        translation + effective_movement.translation
                     );
                     character_body.set_next_kinematic_translation(
                         translation + effective_movement.translation,
@@ -1028,6 +1068,72 @@ mod test {
                 character_handle_cannot_climb,
             );
             update_character_controller(character_controller_can_climb, character_handle_can_climb);
+        }
+        let character_body = bodies.get(character_handle_can_climb).unwrap();
+        assert!(character_body.translation().x > 6.0);
+        assert!(character_body.translation().y > 3.0);
+        let character_body = bodies.get(character_handle_cannot_climb).unwrap();
+        assert!(character_body.translation().x < 4.0);
+        assert!(dbg!(character_body.translation().y) < 2.0);
+    }
+
+    #[test]
+    fn character_controller_ground_detection() {
+        let mut colliders = ColliderSet::new();
+        let mut impulse_joints = ImpulseJointSet::new();
+        let mut multibody_joints = MultibodyJointSet::new();
+        let mut pipeline = PhysicsPipeline::new();
+        let mut bf = BroadPhaseBvh::new();
+        let mut nf = NarrowPhase::new();
+        let mut islands = IslandManager::new();
+
+        let mut bodies = RigidBodySet::new();
+
+        let gravity = Vector::y() * -9.81;
+
+        let ground_size = 1001.0;
+        let ground_height = 1.0;
+        /*
+         * Create a flat ground
+         */
+        let rigid_body =
+            RigidBodyBuilder::fixed().translation(vector![0.0, -ground_height / 2f32, 0.0]);
+        let floor_handle = bodies.insert(rigid_body);
+        let collider = ColliderBuilder::cuboid(ground_size, ground_height, ground_size);
+        colliders.insert_with_parent(collider, floor_handle, &mut bodies);
+
+        let integration_parameters = IntegrationParameters::default();
+
+        // Initialize character with snap to ground
+        let character_controller_snap = KinematicCharacterController {
+            snap_to_ground: Some(CharacterLength::Relative(0.2)),
+            ..Default::default()
+        };
+        let mut character_body_snap = RigidBodyBuilder::kinematic_position_based()
+            .additional_mass(1.0)
+            .build();
+        character_body_snap.set_translation(Vector::new(0.6, 0.5, 0.0), false);
+        let character_handle_snap = bodies.insert(character_body_snap);
+
+        let collider = ColliderBuilder::ball(0.5).build();
+        colliders.insert_with_parent(collider.clone(), character_handle_snap, &mut bodies);
+
+        // Initialize character without snap to ground
+        let character_controller_no_snap = KinematicCharacterController {
+            snap_to_ground: None,
+            ..Default::default()
+        };
+        let mut character_body_no_snap = RigidBodyBuilder::kinematic_position_based()
+            .additional_mass(1.0)
+            .build();
+        character_body_no_snap.set_translation(Vector::new(-0.6, 0.5, 0.0), false);
+        let character_handle_no_snap = bodies.insert(character_body_no_snap);
+
+        let collider = ColliderBuilder::ball(0.5).build();
+        let character_shape = collider.shape();
+        colliders.insert_with_parent(collider.clone(), character_handle_no_snap, &mut bodies);
+
+        for i in 0..10000 {
             // Step once
             pipeline.step(
                 &gravity,
@@ -1040,16 +1146,75 @@ mod test {
                 &mut impulse_joints,
                 &mut multibody_joints,
                 &mut CCDSolver::new(),
-                Some(&mut query_pipeline),
                 &(),
                 &(),
             );
+
+            let mut update_character_controller =
+                |controller: KinematicCharacterController, handle: RigidBodyHandle| {
+                    let character_body = bodies.get(handle).unwrap();
+                    // Use a closure to handle or collect the collisions while
+                    // the character is being moved.
+                    let mut collisions = vec![];
+                    let filter_character_controller = QueryFilter::new().exclude_rigid_body(handle);
+                    let query_pipeline = bf.as_query_pipeline(
+                        nf.query_dispatcher(),
+                        &bodies,
+                        &colliders,
+                        filter_character_controller,
+                    );
+                    let effective_movement = controller.move_shape(
+                        integration_parameters.dt,
+                        &query_pipeline,
+                        character_shape,
+                        character_body.position(),
+                        Vector::new(0.1, -0.1, 0.1),
+                        |collision| collisions.push(collision),
+                    );
+                    let character_body = bodies.get_mut(handle).unwrap();
+                    let translation = character_body.translation();
+                    assert!(
+                        effective_movement.grounded,
+                        "movement should be grounded at all times for current setup (iter: {}), pos: {}.",
+                        i,
+                        translation + effective_movement.translation
+                    );
+                    character_body.set_next_kinematic_translation(
+                        translation + effective_movement.translation,
+                    );
+                };
+
+            update_character_controller(character_controller_no_snap, character_handle_no_snap);
+            update_character_controller(character_controller_snap, character_handle_snap);
         }
-        let character_body = bodies.get(character_handle_can_climb).unwrap();
-        assert!(character_body.translation().x > 6.0);
-        assert!(character_body.translation().y > 3.0);
-        let character_body = bodies.get(character_handle_cannot_climb).unwrap();
-        assert!(character_body.translation().x < 4.0);
-        assert!(dbg!(character_body.translation().y) < 2.0);
+
+        let character_body = bodies.get_mut(character_handle_no_snap).unwrap();
+        let translation = character_body.translation();
+
+        // accumulated numerical errors make the test go less far than it should,
+        // but it's expected.
+        assert!(
+            translation.x >= 997.0,
+            "actual translation.x:{}",
+            translation.x
+        );
+        assert!(
+            translation.z >= 997.0,
+            "actual translation.z:{}",
+            translation.z
+        );
+
+        let character_body = bodies.get_mut(character_handle_snap).unwrap();
+        let translation = character_body.translation();
+        assert!(
+            translation.x >= 997.0,
+            "actual translation.x:{}",
+            translation.x
+        );
+        assert!(
+            translation.z >= 997.0,
+            "actual translation.z:{}",
+            translation.z
+        );
     }
 }

@@ -389,7 +389,7 @@ impl<N, E> Graph<N, E> {
     ///
     /// Produces an empty iterator if the node doesn't exist.<br>
     /// Iterator element type is `EdgeReference<E, Ix>`.
-    pub fn edges(&self, a: NodeIndex) -> Edges<E> {
+    pub fn edges(&self, a: NodeIndex) -> Edges<'_, E> {
         self.edges_directed(a, Direction::Outgoing)
     }
 
@@ -404,7 +404,7 @@ impl<N, E> Graph<N, E> {
     ///
     /// Produces an empty iterator if the node `a` doesn't exist.<br>
     /// Iterator element type is `EdgeReference<E, Ix>`.
-    pub fn edges_directed(&self, a: NodeIndex, dir: Direction) -> Edges<E> {
+    pub fn edges_directed(&self, a: NodeIndex, dir: Direction) -> Edges<'_, E> {
         Edges {
             skip_start: a,
             edges: &self.edges,
@@ -527,11 +527,11 @@ fn edges_walker_mut<E>(
     edges: &mut [Edge<E>],
     next: EdgeIndex,
     dir: Direction,
-) -> EdgesWalkerMut<E> {
+) -> EdgesWalkerMut<'_, E> {
     EdgesWalkerMut { edges, next, dir }
 }
 
-impl<'a, E> EdgesWalkerMut<'a, E> {
+impl<E> EdgesWalkerMut<'_, E> {
     fn next_edge(&mut self) -> Option<&mut Edge<E>> {
         self.next().map(|t| t.1)
     }
@@ -630,7 +630,7 @@ impl<'a, E> Iterator for Edges<'a, E> {
 //     x
 // }
 
-impl<'a, E> Clone for Edges<'a, E> {
+impl<E> Clone for Edges<'_, E> {
     fn clone(&self) -> Self {
         Edges {
             skip_start: self.skip_start,
@@ -699,15 +699,15 @@ impl<'a, E: 'a> EdgeReference<'a, E> {
     }
 }
 
-impl<'a, E> Clone for EdgeReference<'a, E> {
+impl<E> Clone for EdgeReference<'_, E> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a, E> Copy for EdgeReference<'a, E> {}
+impl<E> Copy for EdgeReference<'_, E> {}
 
-impl<'a, E> PartialEq for EdgeReference<'a, E>
+impl<E> PartialEq for EdgeReference<'_, E>
 where
     E: PartialEq,
 {

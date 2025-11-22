@@ -1,13 +1,13 @@
-use super::{outlines, DebugRenderBackend};
+use super::{DebugColor, DebugRenderBackend, outlines};
 use crate::dynamics::{
     GenericJoint, ImpulseJointSet, MultibodyJointSet, RigidBodySet, RigidBodyType,
 };
 use crate::geometry::{Ball, ColliderSet, Cuboid, NarrowPhase, Shape, TypedShape};
 #[cfg(feature = "dim3")]
 use crate::geometry::{Cone, Cylinder};
-use crate::math::{Isometry, Point, Real, Vector, DIM};
-use crate::pipeline::debug_render_pipeline::debug_render_backend::DebugRenderObject;
+use crate::math::{DIM, Isometry, Point, Real, Vector};
 use crate::pipeline::debug_render_pipeline::DebugRenderStyle;
+use crate::pipeline::debug_render_pipeline::debug_render_backend::DebugRenderObject;
 use crate::utils::SimdBasis;
 use parry::utils::IsometryOpt;
 use std::any::TypeId;
@@ -85,6 +85,7 @@ impl DebugRenderPipeline {
     }
 
     /// Render the scene.
+    #[profiling::function]
     pub fn render(
         &mut self,
         backend: &mut impl DebugRenderBackend,
@@ -101,6 +102,7 @@ impl DebugRenderPipeline {
     }
 
     /// Render contact.
+    #[profiling::function]
     pub fn render_contacts(
         &mut self,
         backend: &mut impl DebugRenderBackend,
@@ -167,6 +169,7 @@ impl DebugRenderPipeline {
     }
 
     /// Render only the joints from the scene.
+    #[profiling::function]
     pub fn render_joints(
         &mut self,
         backend: &mut impl DebugRenderBackend,
@@ -177,8 +180,8 @@ impl DebugRenderPipeline {
         let mut render_joint = |body1,
                                 body2,
                                 data: &GenericJoint,
-                                mut anchor_color: [f32; 4],
-                                mut separation_color: [f32; 4],
+                                mut anchor_color: DebugColor,
+                                mut separation_color: DebugColor,
                                 object| {
             if !backend.filter_object(object) {
                 return;
@@ -249,6 +252,7 @@ impl DebugRenderPipeline {
     }
 
     /// Render only the rigid-bodies from the scene.
+    #[profiling::function]
     pub fn render_rigid_bodies(
         &mut self,
         backend: &mut impl DebugRenderBackend,
@@ -288,6 +292,7 @@ impl DebugRenderPipeline {
     }
 
     /// Render only the colliders from the scene.
+    #[profiling::function]
     pub fn render_colliders(
         &mut self,
         backend: &mut impl DebugRenderBackend,
@@ -322,6 +327,8 @@ impl DebugRenderPipeline {
                             c[2] * coeff[2],
                             c[3] * coeff[3],
                         ]
+                    } else if !co.is_enabled() {
+                        self.style.disabled_color_multiplier
                     } else {
                         self.style.collider_parentless_color
                     };
@@ -351,13 +358,14 @@ impl DebugRenderPipeline {
     }
 
     #[cfg(feature = "dim2")]
+    #[profiling::function]
     fn render_shape(
         &mut self,
         object: DebugRenderObject,
         backend: &mut impl DebugRenderBackend,
         shape: &dyn Shape,
         pos: &Isometry<Real>,
-        color: [f32; 4],
+        color: DebugColor,
     ) {
         match shape.as_typed_shape() {
             TypedShape::Ball(s) => {
@@ -453,18 +461,23 @@ impl DebugRenderPipeline {
                 let vtx = s.to_polyline(self.style.border_subdivisions);
                 backend.draw_line_strip(object, &vtx, pos, &Vector::repeat(1.0), color, true)
             }
+            TypedShape::Voxels(s) => {
+                let (vtx, idx) = s.to_polyline();
+                backend.draw_polyline(object, &vtx, &idx, pos, &Vector::repeat(1.0), color)
+            }
             TypedShape::Custom(_) => {}
         }
     }
 
     #[cfg(feature = "dim3")]
+    #[profiling::function]
     fn render_shape(
         &mut self,
         object: DebugRenderObject,
         backend: &mut impl DebugRenderBackend,
         shape: &dyn Shape,
         pos: &Isometry<Real>,
-        color: [f32; 4],
+        color: DebugColor,
     ) {
         match shape.as_typed_shape() {
             TypedShape::Ball(s) => {
@@ -604,6 +617,10 @@ impl DebugRenderPipeline {
             }
             TypedShape::RoundConvexPolyhedron(s) => {
                 let (vtx, idx) = s.to_outline(self.style.border_subdivisions);
+                backend.draw_polyline(object, &vtx, &idx, pos, &Vector::repeat(1.0), color)
+            }
+            TypedShape::Voxels(s) => {
+                let (vtx, idx) = s.to_outline();
                 backend.draw_polyline(object, &vtx, &idx, pos, &Vector::repeat(1.0), color)
             }
             TypedShape::Custom(_) => {}
