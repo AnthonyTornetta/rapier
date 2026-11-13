@@ -57,10 +57,7 @@ pub struct SimulationToRenderTime {
     pub diff: f32,
 }
 
-/// Marker component for to access the default [`ReadRapierContext`].
-///
-/// This is used as the default marker filter for [`systemparams::ReadRapierContext`] and [`systemparams::WriteRapierContext`]
-/// to help with getting a reference to the correct RapierContext.
+/// Marker component identifying the default Rapier context.
 ///
 /// If you're making a library, you might be interested in [`RapierContextEntityLink`]
 /// and leverage a [`Query`] to have precise access to relevant components (for example [`RapierContextSimulation`]).

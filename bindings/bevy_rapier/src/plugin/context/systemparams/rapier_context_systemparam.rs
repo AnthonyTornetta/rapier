@@ -1,4 +1,5 @@
 use crate::math::{Rot, Vect};
+use crate::plugin::RapierContextEntityLink;
 use bevy::ecs::{query, system::SystemParam};
 use bevy::prelude::*;
 use rapier::prelude::Real;
@@ -7,15 +8,13 @@ pub(crate) const RAPIER_CONTEXT_EXPECT_ERROR: &str =
     "RapierContextEntityLink.0 refers to an entity missing components from RapierContextSimulation.";
 
 use crate::plugin::context::{
-    DefaultRapierContext, RapierContextColliders, RapierContextJoints, RapierContextSimulation,
-    RapierQueryPipeline, RapierRigidBodySet,
+    RapierContextColliders, RapierContextJoints, RapierContextSimulation, RapierQueryPipeline,
+    RapierRigidBodySet,
 };
 
 /// Utility [`SystemParam`] to easily access every required components of a [`RapierContext`] immutably.
-///
-/// This uses the [`DefaultRapierContext`] filter by default, but you can use a custom query filter with the `T` type parameter.
 #[derive(SystemParam)]
-pub struct ReadRapierContext<'w, 's, T: query::QueryFilter + 'static = With<DefaultRapierContext>> {
+pub struct ReadRapierContext<'w, 's> {
     /// The query used to feed components into [`RapierContext`] struct through [`ReadRapierContext::single`].
     pub rapier_context: Query<
         'w,
@@ -26,12 +25,11 @@ pub struct ReadRapierContext<'w, 's, T: query::QueryFilter + 'static = With<Defa
             &'static RapierContextJoints,
             &'static RapierRigidBodySet,
         ),
-        T,
     >,
 }
 
-impl<'w, 's, T: query::QueryFilter + 'static> ReadRapierContext<'w, 's, T> {
-    /// Returns a single [`RapierContext`] corresponding to the filter (T) of [`ReadRapierContext`].
+impl<'w, 's> ReadRapierContext<'w, 's> {
+    /// Returns the only [`RapierContext`] in the world.
     ///
     /// If the number of query items is not exactly one, a [`bevy::ecs::query::QuerySingleError`] is returned instead.
     ///
@@ -44,6 +42,24 @@ impl<'w, 's, T: query::QueryFilter + 'static> ReadRapierContext<'w, 's, T> {
             joints,
             rigidbody_set,
         })
+    }
+
+    /// Use this method if you have multiple [`RapierContext`]s
+    ///
+    /// # Panics
+    /// Panics if the link does not refer to a complete Rapier context.
+    /// Use the underlying query [`ReadRapierContext::rapier_context`] for safer alternatives.
+    pub fn get(&self, link: RapierContextEntityLink) -> RapierContext<'_> {
+        let (simulation, colliders, joints, rigidbody_set) =
+            self.rapier_context.get(link.0).unwrap_or_else(|_| {
+                panic!("Unable to query rapier context components for link {link:?}")
+            });
+        RapierContext {
+            simulation,
+            colliders,
+            joints,
+            rigidbody_set,
+        }
     }
 }
 
@@ -65,11 +81,8 @@ pub struct RapierContext<'a> {
 }
 
 /// Utility [`SystemParam`] to easily access every required components of a [`RapierContext`] mutably.
-///
-/// This uses the [`DefaultRapierContext`] filter by default, but you can use a custom query filter with the `T` type parameter.
 #[derive(SystemParam)]
-pub struct WriteRapierContext<'w, 's, T: query::QueryFilter + 'static = With<DefaultRapierContext>>
-{
+pub struct WriteRapierContext<'w, 's> {
     /// The query used to feed components into [`RapierContext`] struct through [`ReadRapierContext::single`].
     pub rapier_context: Query<
         'w,
@@ -80,12 +93,11 @@ pub struct WriteRapierContext<'w, 's, T: query::QueryFilter + 'static = With<Def
             &'static mut RapierContextJoints,
             &'static mut RapierRigidBodySet,
         ),
-        T,
     >,
 }
 
-impl<'w, 's, T: query::QueryFilter + 'static> WriteRapierContext<'w, 's, T> {
-    /// Returns a single [`RapierContext`] corresponding to the filter (T) of [`WriteRapierContext`].
+impl<'w, 's> WriteRapierContext<'w, 's> {
+    /// Returns the only [`RapierContext`] in the world.
     ///
     /// If the number of query items is not exactly one, a [`bevy::ecs::query::QuerySingleError`] is returned instead.
     ///
@@ -100,7 +112,7 @@ impl<'w, 's, T: query::QueryFilter + 'static> WriteRapierContext<'w, 's, T> {
         })
     }
 
-    /// Returns a single mutable [`RapierContextMut`] corresponding to the filter (T) of [`WriteRapierContext`].
+    /// Returns the only mutable [`RapierContextMut`] in the world.
     ///
     /// If the number of query items is not exactly one, a [`bevy::ecs::query::QuerySingleError`] is returned instead.
     ///
@@ -113,6 +125,41 @@ impl<'w, 's, T: query::QueryFilter + 'static> WriteRapierContext<'w, 's, T> {
             joints,
             rigidbody_set,
         })
+    }
+
+    /// Use this method if you have multiple [`RapierContext`]s
+    ///
+    /// # Panics
+    /// Panics if the link does not refer to a complete Rapier context.
+    /// Use the underlying query [`WriteRapierContext::rapier_context`] for safer alternatives.
+    pub fn get(&self, link: RapierContextEntityLink) -> RapierContext<'_> {
+        let (simulation, colliders, joints, rigidbody_set) =
+            self.rapier_context.get(link.0).unwrap_or_else(|_| {
+                panic!("Unable to query rapier context components for link {link:?}")
+            });
+        RapierContext {
+            simulation,
+            colliders,
+            joints,
+            rigidbody_set,
+        }
+    }
+    /// Use this method if you have multiple [`RapierContext`]s.
+    ///
+    /// # Panics
+    /// Panics if the link does not refer to a complete Rapier context.
+    /// Use the underlying query [`WriteRapierContext::rapier_context`] for safer alternatives.
+    pub fn get_mut(&mut self, link: RapierContextEntityLink) -> RapierContextMut<'_> {
+        let (simulation, colliders, joints, rigidbody_set) =
+            self.rapier_context.get_mut(link.0).unwrap_or_else(|_| {
+                panic!("Unable to query rapier context components for link {link:?}")
+            });
+        RapierContextMut {
+            simulation,
+            colliders,
+            joints,
+            rigidbody_set,
+        }
     }
 }
 
@@ -1286,7 +1333,7 @@ mod tests {
     use super::*;
     use crate::geometry::{Collider, NonlinearMotion, ShapeCastOptions, ShapeClosestPoints};
     use crate::plugin::{NoUserData, RapierPhysicsPlugin};
-    use crate::prelude::QueryFilter;
+    use crate::prelude::{QueryFilter, RigidBody};
     use approx::assert_relative_eq;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::time::{TimePlugin, TimeUpdateStrategy};

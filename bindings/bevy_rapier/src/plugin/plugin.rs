@@ -176,6 +176,7 @@ where
                     systems::apply_multibody_joint_properties.in_set(RapierBevyComponentApply),
                     systems::apply_initial_rigid_body_impulses.in_set(RapierBevyComponentApply),
                     systems::apply_rigid_body_user_changes.in_set(RapierBevyComponentApply),
+                    systems::sync_vel.in_set(RapierBevyComponentApply),
                     systems::apply_soft_body_user_changes.in_set(RapierBevyComponentApply),
                     systems::apply_soft_body_cluster_changes.in_set(RapierBevyComponentApply),
                     // Controllers act on the rigid-bodies' up-to-date state, right before the step.
