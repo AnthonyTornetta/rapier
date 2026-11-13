@@ -1,16 +1,16 @@
-use rapier_testbed2d::Testbed;
+use rapier_testbed2d::TestbedViewer;
 use rapier2d::parry::transformation::voxelization::FillMode;
 use rapier2d::prelude::*;
 
 const VOXEL_SIZE: Real = 0.1; // 0.25;
 
-pub fn init_world(testbed: &mut Testbed) {
+pub async fn run(viewer: &mut TestbedViewer) -> anyhow::Result<()> {
     /*
      * Voxel geometry type selection.
      */
     // TODO: make the testbed support custom enums (or at least a list of option from strings and
     //       associated constants).
-    let settings = testbed.example_settings_mut();
+    let settings = viewer.example_settings_mut();
     let falling_objects = settings.get_or_set_string(
         "Falling objects",
         3, // Defaults to Mixed.
@@ -28,10 +28,7 @@ pub fn init_world(testbed: &mut Testbed) {
     /*
      * World
      */
-    let mut bodies = RigidBodySet::new();
-    let mut colliders = ColliderSet::new();
-    let impulse_joints = ImpulseJointSet::new();
-    let multibody_joints = MultibodyJointSet::new();
+    let mut world = PhysicsWorld::new();
 
     /*
      * Create dynamic objects to fall on voxels.
@@ -39,15 +36,13 @@ pub fn init_world(testbed: &mut Testbed) {
     let nx = 50;
     for i in 0..nx {
         for j in 0..10 {
-            let mut rb = RigidBodyBuilder::dynamic().translation(vector![
+            let mut rb = RigidBodyBuilder::dynamic().translation(Vector::new(
                 i as f32 * 2.0 - nx as f32 / 2.0,
-                20.0 + j as f32 * 2.0
-            ]);
+                20.0 + j as f32 * 2.0,
+            ));
             if test_ccd {
-                rb = rb.linvel(vector![0.0, -1000.0]).ccd_enabled(true);
+                rb = rb.linvel(Vector::new(0.0, -1000.0)).ccd_enabled(true);
             }
-            let rb_handle = bodies.insert(rb);
-
             let falling_objects = if falling_objects == 3 {
                 j % 3
             } else {
@@ -61,7 +56,7 @@ pub fn init_world(testbed: &mut Testbed) {
                 2 => ColliderBuilder::capsule_y(ball_radius, ball_radius),
                 _ => unreachable!(),
             };
-            colliders.insert_with_parent(co, rb_handle, &mut bodies);
+            let _ = world.insert(rb, co);
         }
     }
 
@@ -69,22 +64,24 @@ pub fn init_world(testbed: &mut Testbed) {
      * Voxelization.
      */
     let polyline = vec![
-        point![0.0, 0.0],
-        point![0.0, 10.0],
-        point![7.0, 4.0],
-        point![14.0, 10.0],
-        point![14.0, 0.0],
-        point![13.0, 7.0],
-        point![7.0, 2.0],
-        point![1.0, 7.0],
+        Vector::new(0.0, 0.0),
+        Vector::new(0.0, 10.0),
+        Vector::new(7.0, 4.0),
+        Vector::new(14.0, 10.0),
+        Vector::new(14.0, 0.0),
+        Vector::new(13.0, 7.0),
+        Vector::new(7.0, 2.0),
+        Vector::new(1.0, 7.0),
     ];
     let indices: Vec<_> = (0..polyline.len() as u32)
         .map(|i| [i, (i + 1) % polyline.len() as u32])
         .collect();
-    let rb = bodies.insert(RigidBodyBuilder::fixed().translation(vector![-20.0, -10.0]));
     let shape = SharedShape::voxelized_mesh(&polyline, &indices, 0.2, FillMode::default());
 
-    colliders.insert_with_parent(ColliderBuilder::new(shape), rb, &mut bodies);
+    let _ = world.insert(
+        RigidBodyBuilder::fixed().translation(Vector::new(-20.0, -10.0)),
+        ColliderBuilder::new(shape),
+    );
 
     /*
      * A voxel wavy floor.
@@ -92,14 +89,24 @@ pub fn init_world(testbed: &mut Testbed) {
     let voxels: Vec<_> = (0..300)
         .map(|i| {
             let y = (i as f32 / 20.0).sin().clamp(-0.5, 0.5) * 20.0;
-            point![(i as f32 - 125.0) * voxel_size.x / 2.0, y * voxel_size.y]
+            Vector::new((i as f32 - 125.0) * voxel_size.x / 2.0, y * voxel_size.y)
         })
         .collect();
-    colliders.insert(ColliderBuilder::voxels_from_points(voxel_size, &voxels));
+    world.insert_collider(
+        ColliderBuilder::voxels_from_points(voxel_size, &voxels),
+        None,
+    );
 
     /*
      * Set up the testbed.
      */
-    testbed.set_world(bodies, colliders, impulse_joints, multibody_joints);
-    testbed.look_at(point![0.0, 20.0], 17.0);
+    viewer.set_world(&mut world);
+    viewer.look_at(Vec2::new(0.0, 20.0), 17.0);
+
+    while viewer.render_frame(&mut world).await {
+        if viewer.simulating() {
+            world.step();
+        }
+    }
+    Ok(())
 }

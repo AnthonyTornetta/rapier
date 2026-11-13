@@ -1,34 +1,9 @@
+use crate::alloc_prelude::*;
 use crate::dynamics::{CoefficientCombineRule, MassProperties, RigidBodyHandle, RigidBodyType};
 use crate::geometry::{InteractionGroups, Shape, SharedShape};
-use crate::math::{Isometry, Real};
+use crate::math::{Pose, Real};
 use crate::pipeline::{ActiveEvents, ActiveHooks};
-use std::ops::{Deref, DerefMut};
-
-/// The unique identifier of a collider added to a collider set.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
-#[repr(transparent)]
-pub struct ColliderHandle(pub crate::data::arena::Index);
-
-impl ColliderHandle {
-    /// Converts this handle into its (index, generation) components.
-    pub fn into_raw_parts(self) -> (u32, u32) {
-        self.0.into_raw_parts()
-    }
-
-    /// Reconstructs an handle from its (index, generation) components.
-    pub fn from_raw_parts(id: u32, generation: u32) -> Self {
-        Self(crate::data::arena::Index::from_raw_parts(id, generation))
-    }
-
-    /// An always-invalid collider handle.
-    pub fn invalid() -> Self {
-        Self(crate::data::arena::Index::from_raw_parts(
-            crate::INVALID_U32,
-            crate::INVALID_U32,
-        ))
-    }
-}
+use core::ops::{Deref, DerefMut};
 
 bitflags::bitflags! {
     #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
@@ -56,6 +31,10 @@ bitflags::bitflags! {
         const PARENT_EFFECTIVE_DOMINANCE = 1 << 7; // NF update.
         /// Flag indicating that whether or not the collider is enabled was changed.
         const ENABLED_OR_DISABLED = 1 << 8; // BF & NF updates.
+        /// Flag indicating that the collider's shape was deformed in place (a soft-body surface
+        /// following its particles): BF & NF updates, no NF pair workspace invalidation, never
+        /// recycled.
+        const DEFORMED = 1 << 9;
     }
 }
 
@@ -72,7 +51,8 @@ impl ColliderChanges {
             ColliderChanges::PARENT
                 | ColliderChanges::POSITION
                 | ColliderChanges::SHAPE
-                | ColliderChanges::ENABLED_OR_DISABLED,
+                | ColliderChanges::ENABLED_OR_DISABLED
+                | ColliderChanges::DEFORMED,
         )
     }
 
@@ -173,31 +153,31 @@ pub struct ColliderParent {
     /// Handle of the rigid-body this collider is attached to.
     pub handle: RigidBodyHandle,
     /// Const position of this collider relative to its parent rigid-body.
-    pub pos_wrt_parent: Isometry<Real>,
+    pub pos_wrt_parent: Pose,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde-serialize", derive(Serialize, Deserialize))]
 /// The position of a collider.
-pub struct ColliderPosition(pub Isometry<Real>);
+pub struct ColliderPosition(pub Pose);
 
-impl AsRef<Isometry<Real>> for ColliderPosition {
+impl AsRef<Pose> for ColliderPosition {
     #[inline]
-    fn as_ref(&self) -> &Isometry<Real> {
+    fn as_ref(&self) -> &Pose {
         &self.0
     }
 }
 
-impl AsMut<Isometry<Real>> for ColliderPosition {
-    fn as_mut(&mut self) -> &mut Isometry<Real> {
+impl AsMut<Pose> for ColliderPosition {
+    fn as_mut(&mut self) -> &mut Pose {
         &mut self.0
     }
 }
 
 impl Deref for ColliderPosition {
-    type Target = Isometry<Real>;
+    type Target = Pose;
     #[inline]
-    fn deref(&self) -> &Isometry<Real> {
+    fn deref(&self) -> &Pose {
         &self.0
     }
 }
@@ -218,13 +198,13 @@ impl ColliderPosition {
     /// The identity position.
     #[must_use]
     pub fn identity() -> Self {
-        ColliderPosition(Isometry::identity())
+        ColliderPosition(Pose::IDENTITY)
     }
 }
 
 impl<T> From<T> for ColliderPosition
 where
-    Isometry<Real>: From<T>,
+    Pose: From<T>,
 {
     fn from(position: T) -> Self {
         Self(position.into())
@@ -356,6 +336,18 @@ impl ActiveCollisionTypes {
         //
         //       Because that test must be symmetric, we perform two similar tests by swapping
         //       rb_type1 and rb_type2.
+
+        // Soft-frame proxies collide as dynamic bodies.
+        let rb_type1 = if rb_type1.is_soft_frame() {
+            RigidBodyType::Dynamic
+        } else {
+            rb_type1
+        };
+        let rb_type2 = if rb_type2.is_soft_frame() {
+            RigidBodyType::Dynamic
+        } else {
+            rb_type2
+        };
         ((self.bits() >> (rb_type1 as u32 * 4)) & 0b0000_1111) & (1 << rb_type2 as u32) != 0
             || ((self.bits() >> (rb_type2 as u32 * 4)) & 0b0000_1111) & (1 << rb_type1 as u32) != 0
     }

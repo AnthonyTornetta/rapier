@@ -1,22 +1,22 @@
 use obj::raw::object::Polygon;
-use rapier_testbed3d::Testbed;
+use rapier_testbed3d::TestbedViewer;
 use rapier3d::parry::bounding_volume;
 use rapier3d::prelude::*;
 use std::fs::File;
 use std::io::BufReader;
 
-pub fn init_world(testbed: &mut Testbed) {
-    do_init_world(testbed, false);
+pub async fn run(viewer: &mut TestbedViewer) -> anyhow::Result<()> {
+    run_impl(viewer, false).await
 }
 
-pub fn do_init_world(testbed: &mut Testbed, use_convex_decomposition: bool) {
+pub async fn run_impl(
+    viewer: &mut TestbedViewer,
+    use_convex_decomposition: bool,
+) -> anyhow::Result<()> {
     /*
      * World
      */
-    let mut bodies = RigidBodySet::new();
-    let mut colliders = ColliderSet::new();
-    let impulse_joints = ImpulseJointSet::new();
-    let multibody_joints = MultibodyJointSet::new();
+    let mut world = PhysicsWorld::new();
 
     /*
      * Ground
@@ -24,21 +24,24 @@ pub fn do_init_world(testbed: &mut Testbed, use_convex_decomposition: bool) {
     //// OPTION 1: floor made of a single big box.
     // let ground_size = 50.0;
     // let ground_height = 0.1;
-    // let rigid_body = RigidBodyBuilder::fixed().translation(vector![0.0, -ground_height, 0.0]);
+    // let rigid_body = RigidBodyBuilder::fixed().translation(Vector::new(0.0, -ground_height, 0.0));
     // let handle = bodies.insert(rigid_body);
     // let collider = ColliderBuilder::cuboid(ground_size, ground_height, ground_size);
     // colliders.insert_with_parent(collider, handle, &mut bodies);
 
     //// OPTION 2: floor made of a wavy mesh.
     let nsubdivs = 100;
-    let heights = DMatrix::from_fn(nsubdivs + 1, nsubdivs + 1, |i, j| {
+    let heights = Array2::from_fn(nsubdivs + 1, nsubdivs + 1, |i, j| {
         -(i as f32 * 40.0 / (nsubdivs as f32) / 2.0).cos()
             - (j as f32 * 40.0 / (nsubdivs as f32) / 2.0).cos()
     });
-    let heightfield = HeightField::new(heights, vector![100.0, 2.0, 100.0]);
+    let heightfield = HeightField::new(heights, Vector::new(100.0, 2.0, 100.0));
     let mut trimesh = TriMesh::from(heightfield);
     let _ = trimesh.set_flags(TriMeshFlags::FIX_INTERNAL_EDGES);
-    colliders.insert(ColliderBuilder::new(SharedShape::new(trimesh.clone())));
+    world.insert_collider(
+        ColliderBuilder::new(SharedShape::new(trimesh.clone())),
+        None,
+    );
 
     /*
      * Create the convex decompositions.
@@ -51,17 +54,17 @@ pub fn do_init_world(testbed: &mut Testbed, use_convex_decomposition: bool) {
     let shift_xz = 9.0f32;
 
     for (igeom, obj_path) in geoms.into_iter().enumerate() {
-        let deltas = Isometry::identity();
+        let deltas = Pose::IDENTITY;
 
         let mut shapes = Vec::new();
         println!("Parsing and decomposing: {obj_path}");
         let input = BufReader::new(File::open(obj_path).unwrap());
 
         if let Ok(model) = obj::raw::parse_obj(input) {
-            let mut vertices: Vec<_> = model
+            let mut vertices: Vec<Vector> = model
                 .positions
                 .iter()
-                .map(|v| point![v.0, v.1, v.2])
+                .map(|v| Vector::new(v.0, v.1, v.2))
                 .collect();
             let indices: Vec<_> = model
                 .polygons
@@ -78,11 +81,12 @@ pub fn do_init_world(testbed: &mut Testbed, use_convex_decomposition: bool) {
             let aabb =
                 bounding_volume::details::point_cloud_aabb(&deltas, vertices.iter().copied());
             let center = aabb.center();
-            let diag = (aabb.maxs - aabb.mins).norm();
+            let center_v = Vector::new(center.x, center.y, center.z);
+            let diag = (aabb.maxs - aabb.mins).length();
 
             vertices
                 .iter_mut()
-                .for_each(|p| *p = (*p - center.coords) * 10.0 / diag);
+                .for_each(|p| *p = (*p - center_v) * 10.0 / diag);
 
             let indices: Vec<_> = indices
                 .chunks(3)
@@ -106,12 +110,12 @@ pub fn do_init_world(testbed: &mut Testbed, use_convex_decomposition: bool) {
                 let y = (igeom / width) as f32 * shift_y + 7.0;
                 let z = k as f32 * shift_xz - num_duplications as f32 * shift_xz / 2.0;
 
-                let body = RigidBodyBuilder::dynamic().translation(vector![x, y, z]);
-                let handle = bodies.insert(body);
+                let body = RigidBodyBuilder::dynamic().translation(Vector::new(x, y, z));
+                let handle = world.insert_body(body);
 
                 for shape in &shapes {
                     let collider = ColliderBuilder::new(shape.clone()).contact_skin(0.1);
-                    colliders.insert_with_parent(collider, handle, &mut bodies);
+                    world.insert_collider(collider, Some(handle));
                 }
             }
         }
@@ -120,8 +124,15 @@ pub fn do_init_world(testbed: &mut Testbed, use_convex_decomposition: bool) {
     /*
      * Set up the testbed.
      */
-    testbed.set_world(bodies, colliders, impulse_joints, multibody_joints);
-    testbed.look_at(point![100.0, 100.0, 100.0], Point::origin());
+    viewer.set_world(&mut world);
+    viewer.look_at(Vec3::new(100.0, 100.0, 100.0), Vec3::ZERO);
+
+    while viewer.render_frame(&mut world).await {
+        if viewer.simulating() {
+            world.step();
+        }
+    }
+    Ok(())
 }
 
 fn models() -> Vec<String> {

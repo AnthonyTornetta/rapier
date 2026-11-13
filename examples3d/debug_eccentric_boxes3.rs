@@ -1,14 +1,11 @@
 use rapier3d::prelude::*;
-use rapier_testbed3d::Testbed;
+use rapier_testbed3d::TestbedViewer;
 
-pub fn init_world(testbed: &mut Testbed) {
+pub async fn run(viewer: &mut TestbedViewer) -> anyhow::Result<()> {
     /*
      * World
      */
-    let mut bodies = RigidBodySet::new();
-    let mut colliders = ColliderSet::new();
-    let impulse_joints = ImpulseJointSet::new();
-    let multibody_joints = MultibodyJointSet::new();
+    let mut world = PhysicsWorld::new();
 
     /*
      * Ground
@@ -16,29 +13,34 @@ pub fn init_world(testbed: &mut Testbed) {
     let ground_size = 100.1;
     let ground_height = 0.1;
 
-    let rigid_body = RigidBodyBuilder::fixed().translation(vector![0.0, -ground_height, 0.0]);
-    let handle = bodies.insert(rigid_body);
+    let rigid_body = RigidBodyBuilder::fixed().translation(Vector::new(0.0, -ground_height, 0.0));
     let collider = ColliderBuilder::cuboid(ground_size, ground_height, ground_size);
-    colliders.insert_with_parent(collider, handle, &mut bodies);
+    let (handle, _) = world.insert(rigid_body, collider);
 
     // Build the dynamic box rigid body.
-    let (mut vtx, idx) = Cuboid::new(vector![1.0, 1.0, 1.0]).to_trimesh();
+    let (mut vtx, idx) = Cuboid::new(Vector::new(1.0, 1.0, 1.0)).to_trimesh();
     vtx.iter_mut()
-        .for_each(|pt| *pt += vector![100.0, 100.0, 100.0]);
+        .for_each(|pt| *pt += Vector::new(100.0, 100.0, 100.0));
     let shape = SharedShape::convex_mesh(vtx, &idx).unwrap();
 
     for _ in 0..2 {
         let rigid_body = RigidBodyBuilder::dynamic()
-            .translation(vector![-100.0, -100.0 + 10.0, -100.0])
+            .translation(Vector::new(-100.0, -100.0 + 10.0, -100.0))
             .can_sleep(false);
-        let handle = bodies.insert(rigid_body);
         let collider = ColliderBuilder::new(shape.clone());
-        colliders.insert_with_parent(collider, handle, &mut bodies);
+        let (handle, _) = world.insert(rigid_body, collider);
     }
 
     /*
      * Set up the testbed.
      */
-    testbed.set_world(bodies, colliders, impulse_joints, multibody_joints);
-    testbed.look_at(point![10.0, 10.0, 10.0], Point::origin());
+    viewer.set_world(&mut world);
+    viewer.look_at(Vec3::new(10.0, 10.0, 10.0), Vec3::ZERO);
+
+    while viewer.render_frame(&mut world).await {
+        if viewer.simulating() {
+                world.step();
+        }
+    }
+    Ok(())
 }
